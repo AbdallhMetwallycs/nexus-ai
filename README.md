@@ -14,9 +14,10 @@ memory, specialized agents, local tools, Learning Lab, and optional internet.
 > installs, downloads, or deletes without the owner's go-ahead.
 >
 > **Machine state, not repository state:** on 2026-11-07 the owner authorised the Rust + MSVC
-> toolchain install (checkpoint M1.0, `DECISION_LOG.md` D-028). That is a build prerequisite only —
-> no Tauri scaffold, no llama.cpp binary, no model weight, and nothing in this repo changed except
-> documentation.
+> toolchain install (checkpoint M1.0, `DECISION_LOG.md` D-028) and, in the same session, the pinned
+> llama.cpp b12189 CPU archive (checkpoint M1.1, D-030–D-032), which sits in `D:\NEXUS-SIDECAR\b12189\`
+> — **outside this repo**, and run only with no model file. Still nothing here that generates text:
+> no weights, no `src-tauri/`, no crates.io fetch, no npm dependency, and no app code changed.
 
 ## Run it
 

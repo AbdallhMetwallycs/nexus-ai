@@ -116,6 +116,18 @@ engine.measuredFit(id):   Result<{ estimateGB: number; actualRSSGB: number; verd
 `model.ram_admission_failed` and populates `detail` with the numbers, so the UI can show the same
 honest explanation the mock `hardwareCompat()` already writes.
 
+**How these map onto the engine, measured 2026-11-07 (M1.1, `PHASE2_SIDECAR_SPEC.md` §1/§3):**
+`engine.start` spawns `llama-server.exe` with no model and resolves once `GET /health` answers
+(~98 ms measured); `engine.loadModel` is a `POST /models/load` on the loopback port with the per-launch
+bearer token — the route was confirmed live, which is what lets the admission check stay in the core
+instead of being delegated to the engine's own router; `engine.unloadModel` is `POST /models/unload`
+(400 *model is not found* when nothing is loaded, which the Rust side maps to a plain `void`, not an
+error). Two consequences for implementers: a bad model path makes the process **exit** in ~0.11 s
+rather than return an HTTP error, so `engine.loadModel` validates the path before it spawns or posts;
+and `engine.measuredFit` cannot produce a real RSS number until a weights file exists, so under D-022
+it must answer `actualRSSGB: null, measured: false` rather than guess (`MeasuredFit`,
+`src/contract/ipc.ts:189`).
+
 ### 3.2 `model.*` — registry
 
 ```ts

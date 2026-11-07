@@ -19,6 +19,7 @@ to produce it.
 | `cargo --version` | 1.99.1 (5f94df478 2026-08-27) | Same |
 | `cmake` | Not a global command; the VS 2026 instance ships its own (`CMake tools for Visual Studio`) | Source builds must invoke it through the VS environment, not PATH |
 | `cl` (MSVC) | 19.51.36260 (toolset 14.51.36231) via `vcvars64.bat`; Windows SDK 10.0.26100.0 | Present since the checkpoint; not on a plain PATH by design |
+| `D:\NEXUS-SIDECAR\b12189\` | llama.cpp b12189 CPU x64, 61 MB extracted, sha256 `f912ea5e…82aac` | Engine binary present and run weightless (M1.1); **no model file exists**, so no inference number below is measured |
 | `D:` volume | 252 GB total, **~148.6 GB free** | Ample for weights; note the app volume differs from the mock profile |
 | `C:` volume | **83.9 GB free** after the toolchain install (was 99.4 GB) | The toolchain landed on C:; ~15.5 GB consumed |
 | Reference CPU/RAM | i5-8250U 4C/8T ~15 W sustained, 20 GB soldered, UHD 620 + MX150 4 GB | Dominant design constraint |
@@ -204,15 +205,20 @@ no benefit.
 
 M1's exit is one real streamed local answer in the existing Chat screen. Ordered steps:
 
-1. **Prerequisite — DONE 2026-11-07 (§1 checkpoint):** Rust toolchain + Windows MSVC build tools
-   for Tauri, authorised and installed by the owner. The engine still uses an **official prebuilt
-   llama.cpp release binary** rather than compiling from source; that choice was made because the
-   prebuilt is the smaller ask, and having a compiler now does not change it. The archive download
-   remains unauthorised.
+1. **Prerequisites — DONE 2026-11-07 (§1 checkpoint and M1.1):** Rust toolchain + Windows MSVC build
+   tools for Tauri, and the **official prebuilt llama.cpp b12189 CPU x64 archive** — downloaded,
+   checksummed, and run weightless into `D:\NEXUS-SIDECAR\b12189\`. Building the engine from source
+   stays unnecessary, not impossible; the compiler we now have simply is not needed for this. What is
+   still missing is a model file (D-022), which is the last thing between this and a real answer.
 2. `src-tauri/` scaffold, `beforeBuildCommand` wired to the existing Vite build, `base: './'` +
    `HashRouter` preserved so nothing in the UI changes.
 3. Sidecar supervisor: locate binary, verify version, pick a free port, launch with the token,
-   health-probe `/health`, restart on exit, shut down cleanly with the app.
+   health-probe `/health`, restart on exit, shut down cleanly with the app. **Half of this is now
+   measured** (`PHASE2_SIDECAR_SPEC.md` §3/§7): spawn `llama-server.exe` — not `llama.exe`, which can
+   `update` itself — bind `127.0.0.1` explicitly, add `--models-max 1 --no-models-autoload` because a
+   modelless start is router mode, poll `/health` (answers in ~98 ms with no key, so key it out of any
+   security claim), and treat a bad model path as a process exit within 0.11 s rather than an error
+   response.
 4. Model registry: scan the models folder, parse GGUF metadata (name, quant, context, size),
    populate the real `ModelRecord.installed` field.
 5. Admission check wired to the existing `hardwareCompat` thresholds; refuse-with-explanation path.

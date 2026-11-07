@@ -202,6 +202,40 @@ has to run in the VS environment — the verified paths are
 rule for every future install step — **an installer's exit code is not evidence; the artefact is** — and
 that rule is what turns "installed" claims in this project's docs into checkable statements.
 
+**D-030 — The engine is pinned to b12189, CPU x64, and lives outside the repo.** The owner authorised
+"llama.cpp archive only" as the next step, with D-022 reaffirmed. Downloaded
+`llama-b12189-bin-win-cpu-x64.zip` (24,749,596 B, byte-exact against the releases API) and extracted
+52 files / 61 MB to `D:\NEXUS-SIDECAR\b12189\`. SHA-256
+`f912ea5e3e397c63405c81e732131ab0fa6e72411c80546bb5ad643f7dd82aac` (MD5 `22180d8e…93955c`), version
+string `0.9.0-dev (build 12189, commit 80d2c0c2c)`, built with Clang 20.1.8. *Why outside the repo:* a
+third-party binary must never ride in a git checkout, and the zip stays beside it as the checksum
+reference. *Why the caveat matters:* GitHub returned **no digest** for any of these 38 assets, so this
+hash is our own baseline — it detects drift and proves a re-download matches, it does not establish
+publisher intent. Provenance is HTTPS plus the exact asset name until we add a signature check, and
+saying so is better than letting "checksum verified" imply more than it does.
+
+**D-031 — The supervisor spawns `llama-server.exe`, not the unified `llama.exe`.** The zip ships both,
+they load the same `llama-server-impl.dll`, and their help is identical (753 lines, one blank line
+apart) — so this is not a capability choice, it is a surface choice. The unified binary exposes
+`update` (rewrites the engine on disk) and `download` (reaches the network) as subcommands; the
+standalone one has no subcommand parser at all (`llama-server.exe serve` → `invalid argument: serve`).
+*Why:* "the engine never auto-updates" and the offline invariant should be properties of the process
+we launch, not rules our code has to remember to obey. Pairs with `PHASE2_POLICY_MODEL.md` §6
+invariant 1, which now names the engine in its text.
+
+**D-032 — A weightless start is router mode, and the flag set moved under us.** Measured on b12189:
+`llama-server.exe` with no `-m` logs `starting server in router mode` plus its own warning
+`security: router mode enabled - do not expose to untrusted environments`, with `max_instances: 4` and
+`models_autoload: true` visible in `/props`. So the vector gains `--models-max 1` and
+`--no-models-autoload`, and the model arrives through `POST /models/load` — whose route is confirmed
+(404 *File Not Found*, not unknown route) — so that **`engine.loadModel` now has a real home and the
+admission check keeps authority**. Also measured: with a bad `-m` the process exits code 1 in 0.11 s
+and never binds, so a load failure is indistinguishable from a crash and the path must be validated
+before spawning; `/health` answers with no API key while `/v1/models` and `/metrics` return 401; CORS
+defaults to `*` with credentials enabled; `--mlock`/`--no-mmap` are gone, replaced by
+`-lm/--load-mode {auto|none|mmap|mlock|mmap+mlock|dio}`; and `--n-gpu-layers` defaults to `auto`, not
+0 — a CPU-only baseline has to say so. Warm start without weights: socket at +98 ms, idle RSS 12.4 MB.
+
 ## Deferred (explicitly not in Phase 1)
 
 LLM runtime (Ollama/llama.cpp), backend/API, databases, persistent memory,

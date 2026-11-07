@@ -112,14 +112,47 @@ fetched from crates.io, no npm dependency added. All scratch artefacts live outs
 
 ---
 
+### M1.1 — Engine acquisition, weightless *(done 2026-11-07, owner-authorised)*
+
+**Scope:** authorisation checkpoint 3 — download the pinned llama.cpp archive, verify it, and learn
+what it actually is. The owner chose this after M1.0 and reaffirmed D-022, so the engine was run
+**without any model file**.
+
+**What was measured (all of it recorded in `PHASE2_SIDECAR_SPEC.md` §1):**
+
+```
+asset        llama-b12189-bin-win-cpu-x64.zip  24,749,596 B  (API size == downloaded bytes)
+sha256       f912ea5e3e397c63405c81e732131ab0fa6e72411c80546bb5ad643f7dd82aac  (self-computed; GitHub
+             published no digest for these assets, so this is a drift baseline, not a signature)
+version      0.9.0-dev (build 12189, commit 80d2c0c2c), Clang 20.1.8, Windows x86_64
+contents     52 files / 61 MB extracted → D:\NEXUS-SIDECAR\b12189\  (outside the repo)
+weightless   warm: listening at +98 ms, /health {"status":"ok"}, idle RSS 12.4 MB, 15 threads
+             bad -m: exit code 1 in 0.11 s, "exiting due to model loading error" (no socket ever)
+             auth:   /v1/models 401 without bearer; /health needs NO key; /metrics 401
+             routes: POST /models/load exists (404 File Not Found) → engine.loadModel has a home
+             net:    0 non-loopback sockets; default bind 127.0.0.1
+```
+
+**Design corrections this forced:** the supervisor spawns `llama-server.exe` rather than the unified
+`llama.exe`, because the latter exposes `update` and `download` subcommands; a weightless start is
+**router mode**, so `--models-max 1 --no-models-autoload` become part of the vector; `--mlock` and
+`--no-mmap` no longer exist and are replaced by `-lm/--load-mode`; and `--n-gpu-layers` defaults to
+`auto`, so a CPU-only baseline must say `0` out loud.
+
+**Explicitly not in M1.1:** no model weights (D-022), so every §6 performance number — tokens/sec, RSS
+under load, cancel latency, cold start at 3B/7B — remains unmeasured. No `src-tauri/`, no crates.io
+fetch, no npm dependency, and no repo code changed: this milestone produced documents only.
+
+---
+
 ### M1 — One real answer, end to end
 
 **Scope:** Tauri scaffold; sidecar supervisor; model registry reading real GGUF metadata; RAM
 admission check; token streaming into the existing Chat screen; stop/cancel.
 
-**Prerequisite checkpoints:** ~~Rust + MSVC build tools install~~ **done at M1.0**; pinned llama.cpp
-archive download; one model file (owner chooses; nothing downloaded without that choice) — **both
-still unauthorised**.
+**Prerequisite checkpoints:** ~~Rust + MSVC build tools install~~ **done at M1.0**; ~~pinned llama.cpp
+archive download~~ **done at M1.1**; one model file (owner chooses; nothing downloaded without that
+choice) — **still unauthorised, and it is the last prerequisite**.
 
 **Deliverables:** `src-tauri/`, `crates/nexus-core` with `engine`, `registry`, `admission`,
 `inference` modules; the Rust mirror of `src/contract/` (already written at M0.5 — M1 implements it,
@@ -242,7 +275,7 @@ cold start to first ready model         → measured and recorded
 |---|---|---|---|
 | 1 | Install Rust toolchain | `%USERPROFILE%\.cargo`, `.rustup` | **done 2026-11-07 (M1.0)** |
 | 2 | Install MSVC C++ workload | 9.09 GB in the existing VS Community 2026 instance | **done 2026-11-07 (M1.0)** |
-| 3 | Download pinned llama.cpp archive | `sidecar\b12189\` | M1 |
+| 3 | Download pinned llama.cpp archive | 61 MB in `D:\NEXUS-SIDECAR\b12189\` (outside the repo) | **done 2026-11-07 (M1.1)** |
 | 4 | Download a model file | 2–5 GB in the owner's weights folder | M1 |
 | 5 | Add npm/Cargo dependencies | `node_modules`, registry cache | each milestone |
 | 6 | Create the SQLite database | `%APPDATA%\NexusAI\nexus.db` | M2 |
@@ -251,9 +284,10 @@ cold start to first ready model         → measured and recorded
 | 9 | Run a Windows installer build | `src-tauri\target\` | M6 |
 | 10 | Create a GitHub remote / push | off-machine copy | only if you ask |
 
-Items 1–4 are the M1 gate. 1 and 2 are paid; **3 and 4 are the remaining unauthorised downloads**, and
-item 5 has not been exercised yet either — no crate has been fetched from crates.io, so the first
-`cargo` build that pulls Tauri dependencies is itself a checkpoint, not a background step.
+Items 1–4 are the M1 gate. 1, 2 and 3 are paid; **item 4 — a model file — is the one authorisation
+M1 still does not have**, and it is the difference between an engine that starts and an answer that
+streams. Item 5 has not been exercised yet either: no crate has been fetched from crates.io, so the
+first `cargo` build that pulls Tauri dependencies is itself a checkpoint, not a background step.
 
 ---
 

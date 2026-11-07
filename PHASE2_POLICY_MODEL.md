@@ -168,9 +168,22 @@ What enters a prompt is a privacy decision, not a formatting one.
 These are the acceptance checks M4 must pass. Each is written so it can be executed and its output
 recorded, in the same manner as the Phase 1 verification set.
 
-1. With mode `offline`, no code path in the core can open a socket to a non-loopback address.
+1. With mode `offline`, no code path in the core **or the engine** can open a socket to a
+   non-loopback address.
    *Check:* attempt a `net.fetch` and assert `policy.offline` plus a `net://blocked` event, with no
    DNS resolution observed.
+   *Measured 2026-11-07 (M1.1):* an idle `llama-server.exe` opened **0 non-loopback sockets**
+   (`netstat` by PID) and bound `127.0.0.1` even with `--host` omitted. But the engine's own restraint
+   cannot be what this invariant rests on, because the release ships two network commands inside the
+   same folder — `llama.exe update` rewrites the binary on disk and `llama.exe download` fetches
+   models. The mitigation is structural, not behavioural: **the supervisor launches
+   `llama-server.exe`, which has no subcommand surface at all** (`llama-server.exe serve` errors with
+   `invalid argument: serve`), so `update`/`download` are unreachable by the process we spawn. Any
+   future change to that choice must re-assert this invariant with the same socket check.
+   Two related defaults were measured and need decisions, not silence: `/health` answers **without**
+   the API key even when `--api-key` is set, and CORS defaults to `--cors-origins *` with credentials
+   enabled. Loopback plus a random per-launch port keeps both as disclosures; M1 should still narrow
+   CORS explicitly rather than inherit it.
 2. Flipping a UI toggle cannot change behaviour without the corresponding stored row.
    *Check:* hand-edit `settings` to claim a grant the tool never declared; assert step 3 denial.
 3. A `needsApproval` tool cannot execute without an `approved` row consuming it.
