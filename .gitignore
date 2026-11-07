@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+
+# build output (regenerate with: npm run build)
+dist/
+
+# local env / secrets — never committed
+.env
+.env.*
+*.key
+*.pem
+
+# editor + OS noise
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# logs
+*.log
+npm-debug.log*
+
+# Phase 2 (reserved — nothing exists yet)
+# src-tauri/target/
+# src-tauri/gen/
+# models/          # GGUF weights stay out of the repo by design
+# nexus.db*

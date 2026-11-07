@@ -1,0 +1,124 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------------------------------------------------------------------------
+   NEXUS AI design tokens.
+   Dark is the initial/preferred theme. Light theme is supported via
+   `.light` on <html> (toggled by ThemeContext). All surfaces and text
+   colors resolve through these variables so screens never hardcode hex.
+--------------------------------------------------------------------------- */
+
+@layer base {
+  :root,
+  .dark {
+    --s-base: 11 15 23;      /* #0B0F17 app background */
+    --s-raised: 17 23 34;    /* #111722 cards / panels */
+    --s-overlay: 24 32 46;   /* #18202E menus / modals */
+    --s-line: 40 52 71;      /* #283447 borders */
+
+    --ink-primary: 226 232 240;   /* #E2E8F0 */
+    --ink-secondary: 148 163 184; /* #94A3B8 */
+    --ink-muted: 100 116 139;     /* #64748B */
+    --ink-faint: 71 85 105;        /* #475569 */
+
+    color-scheme: dark;
+  }
+
+  .light {
+    --s-base: 246 248 251;
+    --s-raised: 255 255 255;
+    --s-overlay: 255 255 255;
+    --s-line: 214 222 235;
+
+    --ink-primary: 15 23 42;
+    --ink-secondary: 71 85 105;
+    --ink-muted: 100 116 139;
+    --ink-faint: 148 163 184;
+
+    color-scheme: light;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-surface-base font-sans text-ink-primary antialiased;
+    overflow: hidden; /* app shell manages its own scrolling */
+  }
+
+  ::selection {
+    @apply bg-accent/25 text-ink-primary;
+  }
+
+  /* Thin, quiet scrollbars consistent with the premium dark aesthetic */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--s-line)) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: rgb(var(--s-line));
+    border-radius: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* Visible focus for keyboard navigation (no mouse noise) */
+  :focus-visible {
+    outline: 2px solid #38bdf8;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-card border border-surface-line bg-surface-raised shadow-card;
+  }
+  .field {
+    @apply w-full rounded-field border border-surface-line bg-surface-base px-3 py-2 text-sm text-ink-primary placeholder:text-ink-faint transition-colors;
+  }
+  .field:focus {
+    @apply border-accent/60 outline-none;
+  }
+  .field-error {
+    @apply border-state-err/70;
+  }
+  .label {
+    @apply mb-1.5 block text-xs font-semibold uppercase tracking-wider text-ink-muted;
+  }
+  .mono-num {
+    @apply font-mono tabular-nums;
+  }
+  .skeleton {
+    @apply animate-shimmer rounded-md bg-surface-line/60;
+    background-image: linear-gradient(
+      90deg,
+      transparent 0,
+      rgb(255 255 255 / 0.06) 200px,
+      transparent 400px
+    );
+    background-size: 400px 100%;
+    background-repeat: no-repeat;
+  }
+  /* Markdown output inside chat bubbles */
+  .md > * + * {
+    @apply mt-2;
+  }
+  .md h1 { @apply text-base font-bold; }
+  .md h2 { @apply text-sm font-bold; }
+  .md h3 { @apply text-sm font-semibold text-ink-secondary; }
+  .md ul { @apply list-disc space-y-1 pl-5; }
+  .md ol { @apply list-decimal space-y-1 pl-5; }
+  .md p { @apply text-sm leading-relaxed; }
+  .md strong { @apply font-semibold text-ink-primary; }
+  .md a { @apply text-accent underline underline-offset-2; }
+}
