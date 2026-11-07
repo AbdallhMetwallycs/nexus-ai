@@ -116,17 +116,29 @@ engine.measuredFit(id):   Result<{ estimateGB: number; actualRSSGB: number; verd
 `model.ram_admission_failed` and populates `detail` with the numbers, so the UI can show the same
 honest explanation the mock `hardwareCompat()` already writes.
 
-**How these map onto the engine, measured 2026-11-07 (M1.1, `PHASE2_SIDECAR_SPEC.md` §1/§3):**
-`engine.start` spawns `llama-server.exe` with no model and resolves once `GET /health` answers
-(~98 ms measured); `engine.loadModel` is a `POST /models/load` on the loopback port with the per-launch
-bearer token — the route was confirmed live, which is what lets the admission check stay in the core
-instead of being delegated to the engine's own router; `engine.unloadModel` is `POST /models/unload`
-(400 *model is not found* when nothing is loaded, which the Rust side maps to a plain `void`, not an
-error). Two consequences for implementers: a bad model path makes the process **exit** in ~0.11 s
-rather than return an HTTP error, so `engine.loadModel` validates the path before it spawns or posts;
-and `engine.measuredFit` cannot produce a real RSS number until a weights file exists, so under D-022
-it must answer `actualRSSGB: null, measured: false` rather than guess (`MeasuredFit`,
-`src/contract/ipc.ts:189`).
+**How these map onto the engine — corrected 2026-11-07 by checkpoint 4** (`MEASUREMENTS.md` §10,
+`PHASE2_SIDECAR_SPEC.md` §1.4/§3). The M1.1 note here claimed `engine.loadModel` was a `POST /models/load`
+and that the route was confirmed live. It is not a route: with a real file to load, the router answers
+400 `invalid HF repo format, expected <user>/<model>[:quant]`, i.e. **router mode can only acquire models
+from the network**, which D-022 and `--offline` forbid. The mapping is therefore:
+
+- `engine.start` **and** `engine.loadModel` are the *same spawn* — `llama-server.exe -m <path> …` — with
+  the admission check running before `std::process::Command`. `engine.start` alone (warm, no model,
+  ~98 ms) is no longer a state NEXUS should enter, because nothing in the engine can move it to a loaded
+  state locally.
+- `engine.unloadModel` and `engine.stop` are *terminate the process*. There is no unload or shutdown
+  route in b12189 (all four candidates measured 404), so `modelLoaded` in `engine.status` goes back to
+  `undefined` by ending the pid, and a model switch costs the full cold start again: **6–10 s warm,
+  ~38 s cold**. Implementers should treat `engine.loadModel` as a minutes-budget operation, not a
+  request/response, and emit progress while it runs.
+- A bad model path still makes the process **exit** in ~0.11 s rather than return an HTTP error, so the
+  path is validated before the spawn.
+- `engine.measuredFit` is no longer forced to answer `actualRSSGB: null, measured: false`. For the one
+  authorised model the number is real — **1.68 GB private at ctx 2048**, 2.35 GB at 8192, 4.98 GB at
+  32768 (`MEASUREMENTS.md` §4) — and the slope generalises as ~1.5 GB + 0.1106 MB per context token for
+  this architecture. Under D-022 it must still answer `measured: false` for *any other* model; it may
+  answer `measured: true` for this file, at this context, on this machine, and should say so in the
+  verdict rather than implying a class of models.
 
 ### 3.2 `model.*` — registry
 

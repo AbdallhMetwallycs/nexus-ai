@@ -19,10 +19,11 @@ to produce it.
 | `cargo --version` | 1.99.1 (5f94df478 2026-08-27) | Same |
 | `cmake` | Not a global command; the VS 2026 instance ships its own (`CMake tools for Visual Studio`) | Source builds must invoke it through the VS environment, not PATH |
 | `cl` (MSVC) | 19.51.36260 (toolset 14.51.36231) via `vcvars64.bat`; Windows SDK 10.0.26100.0 | Present since the checkpoint; not on a plain PATH by design |
-| `D:\NEXUS-SIDECAR\b12189\` | llama.cpp b12189 CPU x64, 61 MB extracted, sha256 `f912ea5e…82aac` | Engine binary present and run weightless (M1.1); **no model file exists**, so no inference number below is measured |
-| `D:` volume | 252 GB total, **~148.6 GB free** | Ample for weights; note the app volume differs from the mock profile |
-| `C:` volume | **83.9 GB free** after the toolchain install (was 99.4 GB) | The toolchain landed on C:; ~15.5 GB consumed |
-| Reference CPU/RAM | i5-8250U 4C/8T ~15 W sustained, 20 GB soldered, UHD 620 + MX150 4 GB | Dominant design constraint |
+| `D:\NEXUS-SIDECAR\b12189\` | llama.cpp b12189 CPU x64, 61 MB extracted, sha256 `f912ea5e…82aac` (self-computed; the release ships no digest) | Engine binary present and **run with real weights** (checkpoint 4). `llama-bench.exe` reports `cpu_info: Intel Core i5-8250U @ 1.60GHz`, `backends: CPU` |
+| `D:\NEXUS-MODELS\` | `Llama-3.2-3B-Instruct-Q4_K_M.gguf`, 2,019,377,440 B, sha256 `e4f1a04d…210d9a` **verified against the publisher's `lfs.oid`** | The one model D-022 was lifted for. Every inference number in this repo comes from this file |
+| `D:` volume | WDC WD10SPZX-24Z10T0 — **SMR hard disk**, 252 GB total, ~146 GB free | It holds the weights, so cold model load runs at the measured ~77 MB/s and the OS file cache decides whether a start costs 6 s or 38 s |
+| `C:` volume | Crucial CT500BX500SSD1 — SSD; **~82 GB free** after the toolchain install (was 99.4 GB) | The toolchain and the engine live here; ~15.5 GB consumed by the checkpoint installs |
+| Reference CPU/RAM | i5-8250U 4C/8T ~15 W sustained, 20 GB soldered (20,355 MB visible, **6,532 MB free** when measured), UHD 620 + MX150 4 GB | Dominant design constraint. *Measured consequence:* 4 decode threads beat 8 by ~26% (SMT, not extra cores), and the admission ceiling this machine can honestly offer is ~16k context tokens |
 
 **Checkpoint M1.0 — toolchain prerequisite (2026-11-07, owner-authorised; see `DECISION_LOG.md`
 D-028/D-029 and `PHASE2_MILESTONES.md` M1.0):**
@@ -205,32 +206,50 @@ no benefit.
 
 M1's exit is one real streamed local answer in the existing Chat screen. Ordered steps:
 
-1. **Prerequisites — DONE 2026-11-07 (§1 checkpoint and M1.1):** Rust toolchain + Windows MSVC build
-   tools for Tauri, and the **official prebuilt llama.cpp b12189 CPU x64 archive** — downloaded,
-   checksummed, and run weightless into `D:\NEXUS-SIDECAR\b12189\`. Building the engine from source
-   stays unnecessary, not impossible; the compiler we now have simply is not needed for this. What is
-   still missing is a model file (D-022), which is the last thing between this and a real answer.
+1. **Prerequisites — DONE 2026-11-07 (§1 checkpoint, M1.1, checkpoint 4):** Rust toolchain + Windows
+   MSVC build tools for Tauri, the **official prebuilt llama.cpp b12189 CPU x64 archive** in
+   `D:\NEXUS-SIDECAR\b12189\`, and now **one model file** — `Llama-3.2-3B-Instruct-Q4_K_M.gguf`,
+   2,019,377,440 bytes, digest verified against the publisher, in `D:\NEXUS-MODELS\` (owner's path
+   choice). D-022 is lifted for that file and no other. Building the engine from source stays
+   unnecessary, not impossible; the compiler we now have simply is not needed for this.
 2. `src-tauri/` scaffold, `beforeBuildCommand` wired to the existing Vite build, `base: './'` +
    `HashRouter` preserved so nothing in the UI changes.
 3. Sidecar supervisor: locate binary, verify version, pick a free port, launch with the token,
-   health-probe `/health`, restart on exit, shut down cleanly with the app. **Half of this is now
-   measured** (`PHASE2_SIDECAR_SPEC.md` §3/§7): spawn `llama-server.exe` — not `llama.exe`, which can
-   `update` itself — bind `127.0.0.1` explicitly, add `--models-max 1 --no-models-autoload` because a
-   modelless start is router mode, poll `/health` (answers in ~98 ms with no key, so key it out of any
-   security claim), and treat a bad model path as a process exit within 0.11 s rather than an error
-   response.
+   health-probe `/health`, restart on exit, shut down cleanly with the app. **Measured against the real
+   engine twice now** (`PHASE2_SIDECAR_SPEC.md` §3/§4/§7, `MEASUREMENTS.md` §3/§8/§10). Spawn
+   `llama-server.exe` — not `llama.exe`, which can `update` itself — with `-m <path>` and
+   `--offline --metrics -fa on`, bind `127.0.0.1` explicitly, always pass an explicit `--ctx-size`, and
+   budget **6–10 s warm / ~38 s cold** for `/health` to mean "ready" (the M1.1 98 ms figure was a
+   weightless engine, which this build cannot load into locally: router mode's model endpoint takes a
+   Hugging Face repo id, not a path). Two things the design assumed and the engine does not have:
+   there is **no unload route** and **no shutdown route**, so `engine.unloadModel` is terminate-the-pid
+   and app-exit shutdown is TerminateProcess, not a polite request.
 4. Model registry: scan the models folder, parse GGUF metadata (name, quant, context, size),
-   populate the real `ModelRecord.installed` field.
+   populate the real `ModelRecord.installed` field. **Method proven out**: the parser read this file's
+   31 KV pairs and got `general.file_type = 15`, which the engine's own loader agrees is
+   "Q4_K - Medium" — so the quant label comes from metadata, not filename parsing. One trap measured:
+   the KV block here is ~4 MB because `tokenizer.ggml.tokens` is a 128,256-element array, so a reader
+   sized for "a few KB of header" throws before it reaches `general.architecture`.
 5. Admission check wired to the existing `hardwareCompat` thresholds; refuse-with-explanation path.
+   **The thresholds can now be arithmetic**: private RAM measured `1,495 MB + 0.1106 MB × ctx tokens`
+   for this model, the slope within 1.1% of the KV-cache formula computed from GGUF head counts
+   (`MEASUREMENTS.md` §4). The engine does not refuse an over-large context — it loaded 32k at 5.1 GB
+   private on a box with 6.4 GB free — so this check is the only thing standing between a user's
+   request and a swapped desktop.
 6. Streaming path: `chat.send` → sidecar `/completion` with incremental chunks → Tauri event →
-   Chat screen; stop/cancel wired to sidecar abort.
+   Chat screen; stop/cancel wired to sidecar abort. Measured: **abort → engine idle takes up to
+   1,744 ms** (batch-bound), so Stop must stay visibly busy rather than flipping to idle on the
+   rejected fetch.
 7. Honesty swap: remove the Chat `DemoNotice` and the "(Simulated response — no model is running)"
    italic only once 6 is genuinely producing local tokens, and update the context rail from
    simulated to measured.
 
-**M1 measurement checklist** (numbers we currently only estimate): tokens/sec at 7B Q4 and at 3B
-Q4, peak RSS after load, warm-up latency, threads 4 vs 8, sustained throughput after 5 minutes of
-generation, and whether indexing can run concurrently without starving chat.
+**M1 measurement checklist** — largely answered 2026-11-07 by `MEASUREMENTS.md`, on this machine, at
+3B Q4: decode 4.6–5.9 t/s short-run and **4.93 t/s over 176 s sustained**, prefill ~19 t/s, TTFT 3.6 s
+at 80 prompt tokens and **36.6 s at 710**, peak private RAM 1.7 GB at ctx 2k, threads 4 beats 8 for
+decode, 5-minute sustained still open, and concurrent indexing unmeasured because it needs a second
+model file and therefore a fresh authorisation. The premise survives; **prefill, not decode, is what
+threatens it**, which no document in this repo predicted.
 
 ---
 

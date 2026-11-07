@@ -235,6 +235,57 @@ before spawning; `/health` answers with no API key while `/v1/models` and `/metr
 defaults to `*` with credentials enabled; `--mlock`/`--no-mmap` are gone, replaced by
 `-lm/--load-mode {auto|none|mmap|mlock|mmap+mlock|dio}`; and `--n-gpu-layers` defaults to `auto`, not
 0 — a CPU-only baseline has to say so. Warm start without weights: socket at +98 ms, idle RSS 12.4 MB.
+*Superseded in part by D-034: the `POST /models/load` half of this paragraph was a misreading, and the
+two router pins it added left the vector again. The rest — the exit-on-bad-path, `/health`
+authentication, CORS default, `-lm` enum and `-ngl auto` — stands and is still measured truth.*
+
+**D-033 — D-022 lifted for exactly one model file, chosen by the owner.** The owner authorised
+"one model file" to make the `PHASE2_SIDECAR_SPEC.md` §6 numbers measurable, then chose
+`Llama-3.2-3B-Instruct-Q4_K_M.gguf` from `lmstudio-community` and the path `D:\NEXUS-MODELS\`.
+Downloaded 1,879 MB; **size and SHA-256 both verified against the publisher's `lfs.oid`**
+(`2019377440`, `e4f1a04d…210d9a`) — the first artefact in this project whose digest came from someone
+other than us. Scope of the lift: this file, this machine, no other weights, and still no Hugging Face
+integration in the app. *Why it matters:* it converts the entire M1 premise from argument to
+measurement, and it is the difference between "the architecture is compatible with a 15 W laptop" and
+"we know what happens on one."
+
+**D-034 — The engine is spawned single-instance with `-m`; router mode is not usable for local files.**
+With real weights in hand, the router's model endpoint was probed properly and answered
+`POST /models {"model": "D:\\NEXUS-MODELS\\…gguf"}` → **400 `invalid HF repo format, expected
+<user>/<model>[:quant]`**. The field is an HF repo id, so in b12189 router mode **cannot load a local
+file over HTTP**, and the only way it acquires a model is a network fetch — forbidden by D-022's
+surviving scope and by `--offline`. So: `-m <validated path>` at spawn, `--models-max 1` and
+`--no-models-autoload` dropped, and the admission check moves from "before the load call" to "before
+the spawn", which is where `ARCHITECTURE.md` §7 step 5 wanted it anyway. The M1.1 note that the route
+was "confirmed live" was an inference from a 404 that looked like the server's own error format; the
+correction cost one download and two honest re-reads, and it is recorded rather than quietly rewritten.
+
+**D-035 — There is no unload and no shutdown route, so `engine.unloadModel` means killing the process.**
+Against a loaded single-instance server: `POST /unload_model`, `POST /models/unload`,
+`POST /models/<path>/unload`, `DELETE /models/<path>`, `DELETE /models/llama-server` and
+`POST /shutdown` all return **404**. Live admin surface is `/health` (200, still unauthenticated),
+`/props`, `/slots`, `/v1/models`, `/metrics` (501 unless `--metrics` is passed), and the two inference
+routes. *Consequences, in order of how much they hurt:* a model switch costs the full cold start
+(6–10 s warm, ~38 s cold) instead of an HTTP call; `engine.stop` is TerminateProcess, so "shut down
+cleanly with the app" is a promise we can only keep by ending the pid; and any UI state that says
+"model unloaded" implies a reload the user will feel. `PHASE2_IPC_CONTRACT.md` §3.1 was rewritten from
+this evidence.
+
+**D-036 — The measured envelope on this laptop: decode is survivable, prefill is the threat.**
+`MEASUREMENTS.md`, all on the i5-8250U with 6.4 GB free: **4.93 t/s sustained** over 869 streamed
+tokens (179 s), 4.6–5.9 t/s in short arms, **~19 t/s prefill**, TTFT **3.6 s on 80 prompt tokens and
+36.6 s on 710**. RAM is linear in context: **private ≈ 1,495 MB + 0.1106 MB × tokens**, measured at
+2k/8k/32k (1,722/2,401/5,120 MB) and within 1.1% of the KV-cache formula computed from GGUF head
+counts — so the admission model can be arithmetic on metadata instead of a table of guesses. Three
+policy consequences: (a) **`--ctx-size 0` is a hazard**, because 0 means "from the model", this model
+advertises 131,072, and by the measured slope that is ~14.5 GB of KV — the engine loaded 32k at 5.1 GB
+*without refusing*, which is exactly why the core's check exists; (b) **threads come from physical
+cores** — 8 logical cost ~26% of decode against 4, and with `-fa off` at 8 threads prefill collapsed
+2.7× to 7.99 t/s with decode samples spreading 4.26→1.86; (c) **cancel is batch-bound, not instant** —
+1,744 ms from client abort to engine idle in one arm, 231 ms in another, so Stop cannot assume the CPU
+stopped when the fetch rejected. *Why:* the premise survives, but not for the reason the M0 documents
+gave. They treated tokens/sec as the risk; on this hardware the risk is the dead air before the first
+token, which makes prompt-cache reuse a Phase 2 design requirement rather than an optimisation.
 
 ## Deferred (explicitly not in Phase 1)
 

@@ -145,6 +145,24 @@ numbers are guesses until a model has actually been loaded on this machine, and 
 should never present a guess as a measurement. Over time the actual column becomes the basis for
 the fit badges and the estimate becomes history.
 
+**What `ram_gb_actual` means now that it has been measured (checkpoint 4, `MEASUREMENTS.md` §4).**
+The first real row is `Llama-3.2-3B-Instruct-Q4_K_M` at `--ctx-size 2048`: **private 1,721.8 MB**,
+working set 3,521.7 MB. Those two numbers are not interchangeable and the schema must not treat them
+as one column concept:
+
+- Under the default `--load-mode auto` (= mmap) the weights stay **file-backed**, so they show up in
+  the working set and *not* in private bytes. With `--load-mode none|mlock` the same model measures
+  2,338 MB private and 2,222 MB working set — the weights move into our committed memory.
+- Private bytes are what the admission check should charge, because private memory is the part Windows
+  cannot reclaim from us under pressure. Working set is what the Activity screen should show, because
+  it is what Task Manager shows and the user will compare against it.
+- For this model the measured fit is `private ≈ 1,495 MB + 0.1106 MB × ctx_tokens` — linear across
+  2k/8k/32k with the slope landing 1.1% off the theoretical KV-cache size for its architecture
+  (2 × 28 layers × 8 KV heads × 128 dims × f16 = 0.1094 MB/token). So the estimator in M1 can be
+  arithmetic on GGUF metadata rather than a table of guesses, and `general.file_type` plus
+  `llama.context_length` plus the head counts are the inputs. That converts every future `ramGB`
+  estimate in this project from folklore into a formula with a measured coefficient.
+
 ### 3.3 Agents and instructions
 
 ```sql
@@ -228,7 +246,14 @@ CREATE TABLE message_attachment (
 
 `stopped` and the token columns exist because the Chat screen already promises context usage;
 without them the rail can only ever be simulated. `duration_ms` is what turns tokens/sec from an
-estimate into a measured number, which is the single most valuable unknown on this hardware.
+estimate into a measured number, and checkpoint 4 showed *why* that row shape is the right one: the
+engine answered 80 prompt tokens in 3.6 s and 710 in 36.6 s (`MEASUREMENTS.md` §7), so a single
+aggregate tokens/sec figure would have hidden the variable that actually decides whether a turn feels
+fast. **`prompt_tokens` and `duration_ms` together are the only honest form of this column** — store
+both or the number is meaningless, and `completion_tokens / (duration_ms - prompt_ms)` is not
+derivable from what is left. When M1 writes real rows, a per-turn `prompt_ms` split would let the
+Activity screen distinguish prefill from decode instead of averaging them, which is the distinction
+this machine makes 10×.
 
 ### 3.5 Memory
 

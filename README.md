@@ -14,10 +14,15 @@ memory, specialized agents, local tools, Learning Lab, and optional internet.
 > installs, downloads, or deletes without the owner's go-ahead.
 >
 > **Machine state, not repository state:** on 2026-11-07 the owner authorised the Rust + MSVC
-> toolchain install (checkpoint M1.0, `DECISION_LOG.md` D-028) and, in the same session, the pinned
-> llama.cpp b12189 CPU archive (checkpoint M1.1, D-030–D-032), which sits in `D:\NEXUS-SIDECAR\b12189\`
-> — **outside this repo**, and run only with no model file. Still nothing here that generates text:
-> no weights, no `src-tauri/`, no crates.io fetch, no npm dependency, and no app code changed.
+> toolchain install (checkpoint M1.0, `DECISION_LOG.md` D-028), then the pinned llama.cpp b12189 CPU
+> archive (checkpoint M1.1, D-030–D-032) in `D:\NEXUS-SIDECAR\b12189\`, then — for M1.2 — exactly one
+> model file: `Llama-3.2-3B-Instruct-Q4_K_M.gguf`, 1,879 MB in `D:\NEXUS-MODELS\` (D-033). All of it
+> sits **outside this repo**. The engine has since been run with those weights purely to measure it;
+> the raw evidence is `MEASUREMENTS.md`, and the numbers changed four design positions, recorded as
+> D-034–D-036. Still nothing here that generates text: no `src-tauri/`, no crates.io fetch, no npm
+> dependency, and no app code changed, so the bundle is still byte-identical to Phase 1 (the hash
+> check is `DECISION_LOG.md` D-025). The measurement harness is scratch Node scripts in
+> `C:\Users\BS\nexus-toolchain\` — it proves what the engine does, not what `nexus-core` will do.
 
 ## Run it
 
@@ -119,6 +124,9 @@ The Phase 2 design set, written 2026-11-07 after the owner's approval:
 - `PHASE2_POLICY_MODEL.md` — offline/approval/permission enforcement and its 10 invariants.
 - `PHASE2_SIDECAR_SPEC.md` — llama.cpp acquisition, supervision, measurement checklist.
 - `PHASE2_MILESTONES.md` — M0–M6 exit gates and the authorisation checkpoints.
+- `MEASUREMENTS.md` — not design: the raw output of the M1.2 measurement runs against the real
+  engine, and the premise verdict those runs produced. Every number elsewhere in this set traces
+  back to a section here.
 
 **One exception to "design only", added 2026-11-07:** `src/contract/` now holds the IPC
 contract as TypeScript — `ipc.ts` (types + `CommandSpecs`/`EventSpecs`), `client.ts`

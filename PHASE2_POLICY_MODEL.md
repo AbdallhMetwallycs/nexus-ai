@@ -180,10 +180,22 @@ recorded, in the same manner as the Phase 1 verification set.
    `llama-server.exe`, which has no subcommand surface at all** (`llama-server.exe serve` errors with
    `invalid argument: serve`), so `update`/`download` are unreachable by the process we spawn. Any
    future change to that choice must re-assert this invariant with the same socket check.
+   *Measured again 2026-11-07 with real weights loaded, mid-generation (checkpoint 4,
+   `MEASUREMENTS.md` §9):* still **0 non-loopback sockets** for the engine PID, and the bind stays
+   `127.0.0.1`. The `0.0.0.0` that appears in `netstat` is the *remote* column of a listening socket
+   with no peer — not a wildcard bind — and anyone re-checking this invariant should read it that way
+   or they will report a false violation. On top of the structural mitigation, the vector now carries
+   **`--offline`** (`llama-server.exe --help` line 215: "forces use of cache, prevents network
+   access", `LLAMA_ARG_OFFLINE`), so the engine is told not to reach the network rather than trusted
+   not to. What this still does not prove: that no code path inside `llama-server-impl.dll` can
+   bypass `--offline` — the socket census covers the runs we sampled.
    Two related defaults were measured and need decisions, not silence: `/health` answers **without**
-   the API key even when `--api-key` is set, and CORS defaults to `--cors-origins *` with credentials
-   enabled. Loopback plus a random per-launch port keeps both as disclosures; M1 should still narrow
-   CORS explicitly rather than inherit it.
+   the API key even when `--api-key` is set (re-confirmed in single-instance mode: `/health` 200 with
+   no key while `/props`, `/slots`, `/v1/models` and `/metrics` all 401), and CORS defaults to
+   `--cors-origins *` with credentials enabled. Loopback plus a random per-launch port keeps both as
+   disclosures; M1 should still narrow CORS explicitly rather than inherit it. New from the same run:
+   `/v1/models` echoes the model's **absolute path on disk** as its name, so the Models screen must
+   not render that field raw — the path is information about this user's machine.
 2. Flipping a UI toggle cannot change behaviour without the corresponding stored row.
    *Check:* hand-edit `settings` to claim a grant the tool never declared; assert step 3 denial.
 3. A `needsApproval` tool cannot execute without an `approved` row consuming it.
@@ -199,6 +211,16 @@ recorded, in the same manner as the Phase 1 verification set.
 8. Model load above the admission ceiling refuses without allocating.
    *Check:* request an "Exceeds this machine" model; assert `model.ram_admission_failed` and that
    RSS did not move.
+   *Measured basis, 2026-11-07 (checkpoint 4):* the ceiling can now be arithmetic instead of a table.
+   For a 3B Q4_K_M llama-architecture model, private memory was 1,721.8 / 2,401.5 / 5,120.1 MB at
+   ctx 2048 / 8192 / 32768 — `≈ 1,495 MB + 0.1106 MB × tokens`, the slope matching the KV-cache
+   formula to 1.1%. With 6,532 MB free on this machine at the time, a 32k request was already over
+   the honest ceiling even though the engine loaded it without complaint. **That is the whole point of
+   this invariant: the engine does not refuse, so the core must.**
+   *Check for the dangerous case specifically:* `--ctx-size 0` means "take it from the model", and this
+   model advertises `llama.context_length = 131072`, which by the measured slope is ~14.5 GB of KV.
+   So an omitted context is not a neutral default — assert that the spawn argv always carries an
+   explicit `--ctx-size`, and that no path reaches `Command` without one.
 9. Telemetry stays off unless explicitly enabled, and "off" means no request, not an anonymous one.
 10. Every denial, timeout and error writes an activity row with a `correlation_id`.
 

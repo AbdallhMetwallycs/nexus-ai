@@ -129,19 +129,87 @@ contents     52 files / 61 MB extracted → D:\NEXUS-SIDECAR\b12189\  (outside t
 weightless   warm: listening at +98 ms, /health {"status":"ok"}, idle RSS 12.4 MB, 15 threads
              bad -m: exit code 1 in 0.11 s, "exiting due to model loading error" (no socket ever)
              auth:   /v1/models 401 without bearer; /health needs NO key; /metrics 401
-             routes: POST /models/load exists (404 File Not Found) → engine.loadModel has a home
+             routes: POST /models/load 404 → read as "the route exists"; checkpoint 4 below proved
+                     it does not
              net:    0 non-loopback sockets; default bind 127.0.0.1
 ```
 
 **Design corrections this forced:** the supervisor spawns `llama-server.exe` rather than the unified
 `llama.exe`, because the latter exposes `update` and `download` subcommands; a weightless start is
-**router mode**, so `--models-max 1 --no-models-autoload` become part of the vector; `--mlock` and
-`--no-mmap` no longer exist and are replaced by `-lm/--load-mode`; and `--n-gpu-layers` defaults to
-`auto`, so a CPU-only baseline must say `0` out loud.
+**router mode**, so `--models-max 1 --no-models-autoload` became part of the vector (M1.2 removed them
+again for a reason given below); `--mlock` and `--no-mmap` no longer exist and are replaced by
+`-lm/--load-mode`; and `--n-gpu-layers` defaults to `auto`, so a CPU-only baseline must say `0` out loud.
 
 **Explicitly not in M1.1:** no model weights (D-022), so every §6 performance number — tokens/sec, RSS
-under load, cancel latency, cold start at 3B/7B — remains unmeasured. No `src-tauri/`, no crates.io
+under load, cancel latency, cold start at 3B/7B — remained unmeasured. No `src-tauri/`, no crates.io
 fetch, no npm dependency, and no repo code changed: this milestone produced documents only.
+
+---
+
+### M1.2 — One model file, and the numbers it unlocks *(done 2026-11-07, owner-authorised)*
+
+**Scope:** authorisation checkpoint 4 — the owner lifted D-022 for exactly one quantised model, chose
+`Llama-3.2-3B-Instruct-Q4_K_M` and the path `D:\NEXUS-MODELS\`, and the `PHASE2_SIDECAR_SPEC.md` §6
+measurement set was executed against it. Raw output lives in **`MEASUREMENTS.md`**; the harness is the
+scratch scripts in `C:\Users\BS\nexus-toolchain\` (`srv1.mjs`, `route-probe.mjs`, `admin-probe.mjs`,
+`gguf-meta.mjs`, `mem-probe.ps1`), which are deliberately not in the repository.
+
+**What was measured:**
+
+```
+weights      2,019,377,440 B; sha256 e4f1a04d…210d9a == publisher lfs.oid  (first externally-verified
+             digest in this project)
+metadata     llama / 28 layers / 3072 emb / 24 heads, 8 kv heads / vocab 128256 / file_type 15
+             = Q4_K_M; llama.context_length = 131072  ← the model advertises 128k
+cold start   /health with weights resident: 6.0–10.0 s warm file cache, 38.0 s cold
+             (the same spawn weightless answered in 98 ms; weights are two orders of magnitude)
+RAM          private 1,721.8 / 2,401.5 / 5,120.1 MB at ctx 2048 / 8192 / 32768
+             → priv ≈ 1,495 MB + 0.1106 MB × tokens; theoretical KV slope 0.1094, 1.1% off
+             load-mode auto|mmap = 1,722 MB private + reclaimable file pages
+             load-mode none|mlock = 2,338 MB private, committed
+throughput   llama-bench (-ngl 0, -p 512 -n 64 -r 2):
+               t4 fa-on  pp 16.83  tg 4.38    t8 fa-on  pp 21.33  tg 3.24
+               t4 fa-off pp 16.19  tg 3.86    t8 fa-off pp  7.99  tg 3.06 (stddev 1.69)
+             sustained server run: 869 tokens in 179.5 s = 4.93 t/s, TTFT 3.6 s on 80 tokens
+             per-30s windows 152,150,144,142,146,134 → ~12% off over 3 minutes, no cliff
+prefill wall 710-token prompt → TTFT 36,576 ms (19.42 t/s); every run measured cached_tokens: 0
+cancel       abort → engine idle 1,744 ms (231 ms in another arm; batch-bound, not constant)
+crash        SIGKILL mid-generation → 0 orphan processes, GGUF untouched, respawn ready in 6,080 ms
+network      mid-generation netstat for the pid: 1 loopback listener + 1 loopback peer, 0 non-loopback
+```
+
+**Design corrections this forced — four of them, each against something M1.1 had asserted:**
+
+1. **The engine is spawned single-instance with `-m`.** `POST /models` in router mode answers 400
+   `invalid HF repo format, expected <user>/<model>[:quant]`: it parses a model reference as a
+   Hugging Face repo id, so **router mode cannot load a local file at all** and the only alternative
+   would be a network fetch, which D-022 and `--offline` forbid. `--models-max 1` and
+   `--no-models-autoload` left the vector; the admission check moved from "before the load call" to
+   "before the spawn".
+2. **There is no unload route and no shutdown route.** `POST /unload_model`, `POST /models/unload`,
+   `DELETE /models/<path>` and `POST /shutdown` all 404 on a loaded server. `engine.unloadModel` is
+   therefore terminate-the-pid, and every "unloaded" state in the UI implies a 6–38 s reload on the
+   other side of it.
+3. **`--ctx-size 0` is a hazard, not a default.** 0 means "take it from the model", this model says
+   131072, and by the measured slope that is ~14.5 GB of KV on a machine with 6.4 GB free. The engine
+   did not refuse 32k; it loaded 5.1 GB private without complaint — the admission check is the only
+   thing between a user's request and a swapped desktop.
+4. **Threads must come from physical cores, and flash-attn must be stated.** 8 logical threads cost
+   ~26% of decode against 4; with `-fa off` at 8 threads prefill collapses 2.7× and the decode samples
+   spread from 4.26 to 1.86 t/s. Added to the vector: `--offline`, `--metrics` (without it `/metrics`
+   is 501), `-fa on`.
+
+**Premise verdict:** M1's exit — one real streamed local answer — is **achievable on this hardware**,
+verified: 869 real tokens streamed end to end at 4.93 t/s in 1.7 GB private, loopback-only, `--offline`.
+Qualified: at 4.5–5 t/s a 300-token answer takes about a minute, so this is a "thinking for a minute"
+product on this laptop; and the binding constraint is **prefill, not decode** — 36.6 s of dead air
+before the first token on a 710-token prompt, with no prompt cache exercised in any run. Phase 2's
+memory-and-RAG context assembly must be designed around cache reuse or small contexts, which is a new
+requirement no M0 document carried.
+
+**Explicitly not in M1.2:** no `src-tauri/`, no crates.io fetch, no npm dependency, no app code changed,
+and no second model. `MEASUREMENTS.md` §12 lists what stayed open, including concurrent indexing (needs
+another authorisation) and the 5-minute sustained arm.
 
 ---
 
@@ -151,8 +219,9 @@ fetch, no npm dependency, and no repo code changed: this milestone produced docu
 admission check; token streaming into the existing Chat screen; stop/cancel.
 
 **Prerequisite checkpoints:** ~~Rust + MSVC build tools install~~ **done at M1.0**; ~~pinned llama.cpp
-archive download~~ **done at M1.1**; one model file (owner chooses; nothing downloaded without that
-choice) — **still unauthorised, and it is the last prerequisite**.
+archive download~~ **done at M1.1**; ~~one model file~~ **done at M1.2** — the owner authorised exactly
+one, chose it and chose the path. **No prerequisite is left unauthorised: the only gate standing
+between here and M1 code is the `src-tauri/` scaffold plus the first crates.io fetch** (checkpoint 5).
 
 **Deliverables:** `src-tauri/`, `crates/nexus-core` with `engine`, `registry`, `admission`,
 `inference` modules; the Rust mirror of `src/contract/` (already written at M0.5 — M1 implements it,
@@ -276,7 +345,7 @@ cold start to first ready model         → measured and recorded
 | 1 | Install Rust toolchain | `%USERPROFILE%\.cargo`, `.rustup` | **done 2026-11-07 (M1.0)** |
 | 2 | Install MSVC C++ workload | 9.09 GB in the existing VS Community 2026 instance | **done 2026-11-07 (M1.0)** |
 | 3 | Download pinned llama.cpp archive | 61 MB in `D:\NEXUS-SIDECAR\b12189\` (outside the repo) | **done 2026-11-07 (M1.1)** |
-| 4 | Download a model file | 2–5 GB in the owner's weights folder | M1 |
+| 4 | Download a model file | 1,879 MB in `D:\NEXUS-MODELS\` (owner named file and folder) | **done 2026-11-07 (M1.2)** |
 | 5 | Add npm/Cargo dependencies | `node_modules`, registry cache | each milestone |
 | 6 | Create the SQLite database | `%APPDATA%\NexusAI\nexus.db` | M2 |
 | 7 | Watch a real folder | reads only; no writes outside cache | M3 |
@@ -284,10 +353,11 @@ cold start to first ready model         → measured and recorded
 | 9 | Run a Windows installer build | `src-tauri\target\` | M6 |
 | 10 | Create a GitHub remote / push | off-machine copy | only if you ask |
 
-Items 1–4 are the M1 gate. 1, 2 and 3 are paid; **item 4 — a model file — is the one authorisation
-M1 still does not have**, and it is the difference between an engine that starts and an answer that
-streams. Item 5 has not been exercised yet either: no crate has been fetched from crates.io, so the
-first `cargo` build that pulls Tauri dependencies is itself a checkpoint, not a background step.
+Items 1–4 are the M1 gate and **all four are now paid** — 1 and 2 at M1.0, 3 at M1.1, and 4 at M1.2,
+where the owner named both the file and the folder. Item 5 has now been exercised once in the
+*download* sense and not at all in the *registry* sense: no crate has been fetched from crates.io, so
+the first `cargo build` that pulls Tauri dependencies is itself a checkpoint, not a background step —
+that is checkpoint 5, and it is the only authorisation M1 still lacks.
 
 ---
 
@@ -299,9 +369,14 @@ has real numbers instead of estimates; an installer runs on a clean machine; and
 a tag with its gate output recorded. Anything still simulated keeps its banner — that is the
 difference between a roadmap and a lie.
 
+The measurement clause moved from "has real numbers" to **"has real numbers and real code behind
+them"**: as of M1.2 the numbers exist (`MEASUREMENTS.md`) but every one of them came from a scratch
+Node harness, not from `nexus-core`. Until the Rust supervisor produces the same output, no screen may
+claim it.
+
 ---
 
 ## 5. Companion documents
 
 `ARCHITECTURE.md` · `PHASE2_IPC_CONTRACT.md` · `PHASE2_DATA_MODEL.md` · `PHASE2_POLICY_MODEL.md` ·
-`PHASE2_SIDECAR_SPEC.md` · `PHASE_1_COMPLETION_REPORT.md`
+`PHASE2_SIDECAR_SPEC.md` · `MEASUREMENTS.md` · `PHASE_1_COMPLETION_REPORT.md`

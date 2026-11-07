@@ -2,10 +2,11 @@
 
 **Doc:** engine acquisition, supervision, and integration contract
 **Written:** 2026-11-07 · **Runtime decision:** llama.cpp sidecar
-**Status update:** §1 is now **measured** — the pinned CPU x64 archive was downloaded, checksummed,
-extracted, and run with no weights on 2026-11-07 under the owner's authorisation (M1.1). §2–§8 remain
-design: §3's supervision mode is a recommendation, and §6's performance list is still unmeasured
-because no model file exists on this machine (D-022 holds).
+**Status update:** measured end to end on 2026-11-07. §1 is the weightless engine run (M1.1); §1.4 and §6
+are the checkpoint-4 runs **with real weights** — the owner lifted D-022 for exactly one model file and
+the raw outputs are in `MEASUREMENTS.md`. Two design positions were corrected by that evidence rather
+than by preference: the engine is spawned single-instance with `-m` (§3, §4), and there is no HTTP
+unload or shutdown route to supervise (§1.4, §7). §2, §5 and §8 remain design.
 
 ---
 
@@ -94,15 +95,38 @@ Run with no `-m` at all — this is the engine-warm, model-unloaded state NEXUS 
   `model_path: "none"`, `build_info: "b12189-80d2c0c2c"`, `cors_proxy_enabled: false`.
 - `POST /v1/chat/completions` (with key) → **400** `model name is missing from the request`: the
   `model` field is mandatory even with exactly one model, so the inference client always sends it.
-- `POST /models/load` (with key) → **404 File Not Found** for a missing path: the **route exists**,
-  which is what `engine.loadModel` needs. `POST /models/unload` → 400 *model is not found*;
-  `/slots` → 400 (needs a model); `/metrics` → 401.
+- `POST /models/load` (with key) → **404 File Not Found** for a missing path. At the time this was read
+  as "the route exists"; with a real file to load it turned out to be **a route that does not exist at
+  all** — see §1.4. `POST /models/unload` → 400 *model is not found*, likewise misread; `/slots` → 400
+  (needs a model); `/metrics` → 401 without a key, and 501 without `--metrics`.
 - `netstat` for the PID: **0 non-loopback sockets**, and the default bind is `127.0.0.1` even when
   `--host` is omitted. The offline default held during this run.
 
 Everything that actually costs money — tokens/sec, RSS with weights, cancel latency, mmap-vs-mlock,
 cold start at 3B/7B — is **still unmeasured**, because measuring it requires a model file we were not
 authorised to download. That is a real limit on this checkpoint, not a pause: §6's list stays open.
+
+### 1.4 What the HTTP surface is when weights are available (checkpoint 4, corrected)
+
+`MEASUREMENTS.md` §10 carries the raw probe output. The short version, because it changed the design:
+
+- `POST /models {"model": "D:\\NEXUS-MODELS\\…gguf"}` on a router-mode server → **400**
+  `invalid HF repo format, expected <user>/<model>[:quant]`. The router parses the field as a
+  Hugging Face repo id. **There is no local-path load in router mode**, and adding a model to the
+  pool means fetching it from the network — the thing D-022 forbids and `--offline` blocks. The
+  M1.1 reading of the earlier 404 ("the route exists") was wrong: `POST /models/load` is not a route
+  at all.
+- With a model loaded single-instance, **no unload and no shutdown route exist**: `POST /unload_model`,
+  `POST /models/unload`, `DELETE /models/<path>`, `POST /shutdown` all answer 404. `engine.unloadModel`
+  therefore means *kill the process*, and app-exit shutdown means *terminate*, not *ask politely*.
+- Live routes, verified together: `/health` (200, unauthenticated), `/props`, `/slots`, `/v1/models`,
+  `/v1/chat/completions`, `/completion`, `/metrics` — the last only when `--metrics` is in the argv;
+  without it the server answers **501** `This server does not support metrics endpoint`.
+- `/v1/models` echoes the model's **absolute filesystem path** as its `name`. Treat it as machine-local
+  user data: do not render it in the UI, do not log it into an activity row.
+- `--offline` (help line 215, `LLAMA_ARG_OFFLINE`: "forces use of cache, prevents network access") is
+  accepted by `llama-server.exe` and is now in the vector, alongside the structural argument that we
+  never spawn the unified `llama.exe` where `update` and `download` live.
 
 ---
 
@@ -132,21 +156,23 @@ first. Nothing in this spec assumes a silent fetch.
 
 ```
 core (Rust)                              sidecar
-  │  1. pick free ephemeral port P
-  │  2. generate token T (32 random bytes, per launch)
-  ├─ spawn llama-server.exe --host 127.0.0.1 --port P --api-key T --no-ui
-  │       --models-max 1 --no-models-autoload …      (engine warm, no model yet — measured: ~98 ms)
-  │       3. poll GET /health until the socket answers {"status":"ok"}
-  │       4. record pid, port, version in engine_state
-  ├─ POST /models/load {path}           → the registry + admission gate already chose this model
-  │       5. poll GET /health until ready (bounded, e.g. 90 s for a 4.7 GB load)
+  │  1. validate the model path (the registry + admission gate already chose it)
+  │  2. pick free ephemeral port P
+  │  3. generate token T (32 random bytes, per launch)
+  ├─ spawn llama-server.exe -m <path> --host 127.0.0.1 --port P --api-key T --no-ui
+  │       --offline --metrics --flash-attn on --ctx-size C --threads N --n-gpu-layers 0
+  │       --parallel 1 --load-mode auto …
+  │       4. poll GET /health until the socket answers {"status":"ok"}
+  │          — that answer is the model being resident: measured 6–10 s warm, ~38 s cold
+  │       5. record pid, port, version in engine_state
   ├─ POST /v1/chat/completions  (Authorization: Bearer T, "model" always sent) → streamed deltas
   ├─ POST /completion           (raw tokens, for fine control)
-  │       6. on app exit / cancel: graceful terminate, kill on timeout
-  └─ 7. watchdog: unexpected exit → engine.crashed, restart on next request
+  │       6. on stop-request: abort the fetch; the engine keeps going for up to ~1.7 s (measured)
+  │       7. on app exit / model switch: terminate the process (there is no unload route, §1.4)
+  └─ 8. watchdog: unexpected exit → engine.crashed, restart on next request
 ```
 
-Two changes came out of the measurement, not out of preference.
+Three changes came out of the measurements, not out of preference.
 
 **The supervisor spawns `llama-server.exe`, not `llama.exe`.** Both exist and reach the same
 10 MB `llama-server-impl.dll`, and `--help` is byte-identical (753 lines, one blank line apart).
@@ -155,14 +181,16 @@ which reaches the network. Choosing the standalone exe removes those from the at
 surface entirely, so "the engine never auto-updates" becomes a property of the binary we run rather
 than a rule our code remembers.
 
-**A weightless start is router mode, so router mode must be pinned down rather than assumed away.**
-With no `-m`, b12189 logs `starting server in router mode` and its own warning
-`security: router mode enabled - do not expose to untrusted environments`, with `max_instances: 4`
-and `models_autoload: true`. Left alone that contradicts two decisions: the core, not the engine,
-decides which model is resident, and the admission check exists precisely so nothing loads that
-breaks the 20 GB box. Hence `--models-max 1` and `--no-models-autoload` in the vector, and loading
-only through `POST /models/load`, whose route was confirmed live (404 *File Not Found* for a missing
-path rather than an unknown route).
+**A weightless start is router mode, and router mode turns out not to be usable — so we do not start
+weightless.** With no `-m`, b12189 logs `starting server in router mode` and its own warning
+`security: router mode enabled - do not expose to untrusted environments`, with `max_instances: 4` and
+`models_autoload: true`. The M1.1 checkpoint pinned those down (`--models-max 1 --no-models-autoload`)
+and read the 404 from `POST /models/load` as a live route. With a real weights file the same probe
+returns 400 `invalid HF repo format, expected <user>/<model>[:quant]` — see §1.4. Router mode cannot
+load a local file over HTTP at all, and the only way it can acquire a model is a network fetch, which
+D-022 and `--offline` forbid. So the engine is spawned **single-instance with `-m`**, the admission
+check moves before the spawn (step 1 above), and `--models-max`/`--no-models-autoload` are no longer
+part of the vector.
 
 Design points:
 
@@ -179,9 +207,11 @@ Design points:
   which means a browser page could aim requests at our loopback port. The key blocks real use, and
   a random per-launch port makes the address unguessable, but M1 should still pass an explicit
   `--cors-origins` rather than inherit it. Flagged, not yet decided.
-- **Single loaded model.** The core loads one model at a time and refuses a second until the first
-  is unloaded — now enforced by `--models-max 1` rather than by our own discipline. Two 7B-class
-  models resident on 20 GB alongside Windows is not a configuration worth discovering by accident.
+- **Single loaded model, enforced by the process itself.** One spawn, one `-m`, one resident model: with
+  single-instance mode the constraint is structural rather than a flag. Two 7B-class models resident
+  alongside Windows is not a configuration worth discovering by accident. Switching models means
+  terminate-and-respawn (§1.4), which costs the full §3 cold/warm start again — that is now a UX fact,
+  not an implementation detail.
 - **Load failure looks like a crash, because it is one.** `-m <missing file>` exits code 1 in
   ~0.11 s with `exiting due to model loading error` and never reaches a listening socket. So the
   supervisor's model-error path is "process gone", and the registry must validate the path before
@@ -203,38 +233,47 @@ Design points:
 
 ```
 llama-server.exe
+  -m             <validated path>       # single-instance: the model arrives with the process (§1.4)
   --host         127.0.0.1
   --port         <ephemeral, chosen by core>
   --api-key      <per-launch token>
   --no-ui                     # was --no-webui: still parses, now deprecated
-  --no-models-autoload        # router mode is on without -m; keep loading under core control
-  --models-max   1            # single resident model, enforced by the engine
-  --ctx-size     <min(model context, admission cap)>   # -c; 0 = take it from the model
-  --threads      <measured: 4 vs 8, see §6>            # -t, generation threads
-  --threads-batch <measured with -t>                   # -tb, exists separately
+  --offline                   # help 215: prevents network access; the belt to spawn-only-llama-server's braces
+  --metrics                   # without it /metrics is 501, and engine.metrics has nothing to read
+  --ctx-size     <min(model context, admission cap)>   # -c; 0 = take it from the model — never use 0
+  --threads      <physical cores, not logical>         # -t, generation threads; measured §6
+  --threads-batch <same unless measured otherwise>     # -tb, exists separately
+  --flash-attn   on                                  # -fa {on|off|auto}; at t=8 off costs 2.7× prefill
   --n-gpu-layers 0            # -ngl; accepts a number, 'auto', or 'all' (default auto!)
   --parallel     1            # -np: server SLOTS, not CPU threads — do not confuse the two
-  --load-mode    <measured>   # -lm {auto|none|mmap|mlock|mmap+mlock|dio}
+  --load-mode    auto         # -lm {auto|none|mmap|mlock|mmap+mlock|dio}; auto = mmap, measured §6
   --log-disable              # we capture stdout/stderr ourselves; no prompt content in files
 ```
 
+`-c 0` is the one flag in this table that can damage the machine: this file advertises
+`llama.context_length = 131072`, so "load from model" asks for a 128k KV cache ≈ **14.5 GB** by the
+measured slope of 0.1106 MB/token (`MEASUREMENTS.md` §4) on a box with 6.4 GB free. The admission
+check must never pass `0`, and the registry's default context must be a number we chose, not the
+model's.
+
 Corrections this replaced, each one a flag the M0 draft assumed:
 
-- `--model` is **absent from the spawn vector** — the process starts warm and the model arrives via
-  `POST /models/load`. Passing `-m` at spawn would put the load before the admission check.
-- `--mlock` and `--no-mmap` **do not exist**; `-lm/--load-mode` is one enum with six values, so the
-  RAM question in §6 is a four-arm measurement (auto, mmap, mlock, mmap+mlock), not a toggle.
+- `--model` **is** in the spawn vector — the M1.1 draft deliberately left it out so a model could
+  arrive later by HTTP. §1.4 closed that route: the router only accepts HF repo ids, so a local file
+  can only be loaded at spawn. The admission check moves earlier, from "before the load call" to
+  "before the spawn".
+- `--models-max 1` and `--no-models-autoload` are **gone**. They were pins on a router mode we no longer
+  enter; single-instance spawn enforces the same property structurally.
+- `--mlock` and `--no-mmap` **do not exist**; `-lm/--load-mode` is one enum with six values. Four arms
+  were measured (`MEASUREMENTS.md` §5): `mmap`/`auto` keeps the 1.9 GB of weights as reclaimable file
+  pages (1,722 MB private), `none` and `mlock` commit them as ours (2,338 MB private). On this machine
+  `auto` is the default, and `mlock` is an opt-in for latency that costs 600 MB of headroom.
 - `--n-gpu-layers` **defaults to `auto`, not 0** — a CPU-only baseline has to say `0` out loud,
   otherwise an MX150 that happens to enumerate could take layers nobody approved.
-- `--parallel` (`-np`) is server slots; CPU width is `--threads`/`--threads-batch`. The M0 comment
-  "one slot; the core's scheduler is the queue" is still the intent, and the flag is the right one.
-- Added: `--threads-batch`, `--no-models-autoload`, `--models-max`, and `--log-disable` already
-  existed (line 204 of the help).
-
-`--load-mode` stays a genuine open question on this machine: mlock keeps weights off the SMR HDD
-(good latency, less headroom) while mmap lets Windows page them out under pressure (bad latency,
-responsive desktop). The answer is a measurement with weights present, which is exactly what D-022
-forbids today — so it moves to §6 rather than into a config default.
+- `--parallel` (`-np`) is server slots; CPU width is `--threads`/`--threads-batch`. Measured: 8 logical
+  threads cost 26% of decode throughput against 4 physical ones, so "threads" must come from a physical
+  core count, not `hardware_concurrency`.
+- Added after measurement: `--offline`, `--metrics`, `--flash-attn on`.
 
 ---
 
@@ -249,10 +288,12 @@ a 15 W CPU. Realistically:
 - The CUDA 12.4 asset targets a toolkit version whose support for Pascal needs checking before we
   depend on it; the Vulkan asset is the more likely way to use this GPU at all.
 
-**Decision for M1: CPU-only baseline, measured first.** GPU offload becomes an experiment after we
-know the CPU tokens/sec, with the Vulkan build tried in a separate folder so the primary path stays
-clean. Any claim about speedup here before measurement would be fiction, and the Model Manager's
-`gpuRecommended` flag should stay an estimate until we have numbers from this exact hardware.
+**Decision for M1: CPU-only baseline, measured first.** That measurement happened on 2026-11-07
+(`MEASUREMENTS.md` §6–§7): **4.93 t/s sustained decode, ~19 t/s prefill** at 4 threads on this CPU.
+GPU offload is now an experiment against a number rather than an abstraction — anything that cannot
+beat 4.9 t/s decode is not worth the packaging cost, and the Vulkan build should be tried in a separate
+folder so the primary path stays clean. The Model Manager's `gpuRecommended` flag should stay an
+estimate until we have numbers from this exact GPU.
 
 Two measured supports for that decision from the download itself: the CPU x64 zip contains **no GPU
 backend DLL at all** — every `ggml-*` in it is a CPU instruction-set build or RPC, with no
@@ -263,38 +304,51 @@ the MX150; the CUDA 12.4 asset is 288 MB and targets Pascal support we have not 
 
 ---
 
-## 6. M1 measurement checklist (what weights still gate)
+## 6. M1 measurement checklist (closed 2026-11-07, checkpoint 4)
 
-Recorded as raw output in `MEASUREMENTS.md`, not summarised. The list split in two on 2026-11-07: a
-few numbers became measurable without weights, and the rest still are not.
+Recorded as raw output in `MEASUREMENTS.md`, not summarised. That file is the evidence; this table is
+the index — what was asked, what answered.
 
-Already measured on 2026-11-07, without weights (the only part M1.1 could reach):
+Weightless numbers, from M1.1, still true and still the floor the admission model charges:
 
 - **Warm start with no model: socket listening at +98 ms**, `/health` answering `{"status":"ok"}`
   inside the same tenth of a second. Two runs agreed to within ~13 ms.
 - **Idle sidecar footprint: 12.4 MB working set**, 4.9 MB private, 15 threads, 4.2 GB virtual
-  reserved. That is the fixed cost the admission model must charge before any weight estimate.
+  reserved.
 - **Load failure costs 0.11 s and exits code 1** — no socket, no half-alive process.
 - **Zero non-loopback sockets** while the engine sat up, and the default bind was `127.0.0.1`.
 
-Still open — every one of these needs a model file, which D-022 says we do not have:
+Measured now, with `Llama-3.2-3B-Instruct-Q4_K_M.gguf` (2,019,377,440 B, digest verified upstream),
+CPU-only, this laptop, 6.4 GB RAM free at the time:
 
-1. Cold start to `/health` ready, at 3B and 7B Q4.
-2. Peak RSS after load vs the catalog's `ramGB` estimate — the correction that makes future fit
-   badges measured rather than estimated.
-3. Tokens/sec: first token, and sustained over 60 s and over 5 min (thermal throttle behaviour).
-4. `--threads` 4 vs 8, same prompt, interleaved runs to avoid ordering bias.
-5. Context growth cost: 2k / 8k / 32k on RAM and speed.
-6. Cancel latency: time from `chat.stop` to the sidecar actually being idle.
-7. Crash restart: kill the process mid-generation, measure recovery and what the UI showed.
-8. Concurrent indexing: embedding batch while a chat runs — does chat throughput collapse?
-9. Disk: whether model load from the SSD versus the SMR HDD changes cold start materially.
-10. New, from the flag reconciliation: `-lm/--load-mode` across `auto / mmap / mlock / mmap+mlock`
-    on this SSD + SMR pair, and which `ggml-cpu-*.dll` the loader actually picks on a Kaby Lake CPU.
+| # | Question | Answer | Where |
+|---|---|---|---|
+| 1 | Cold start to ready with weights | **~38 s cold, 6–10 s warm** (file cache on the SMR HDD) | `MEASUREMENTS.md` §3 |
+| 2 | Peak RAM after load vs the estimate | **1,722 MB private at ctx 2k**; the catalog estimate for this model was 2.0 GB | §4 |
+| 3 | Tokens/sec, first token, sustained | decode **4.6–5.9 t/s** (short tails) → **4.93 t/s over 176 s**; TTFT **3.6 s** on 80 tokens, **36.6 s on 710** | §6, §7 |
+| 4 | `--threads` 4 vs 8 | **4 wins decode (4.38 vs 3.24 t/s), 8 wins prefill (21.3 vs 16.8)**; 8 is not "more cores", it is SMT | §6 |
+| 5 | Context cost 2k/8k/32k | **0.1106 MB per token** (theory 0.1094, 1% off), intercept ~1,495 MB; 32k = 5,120 MB private | §4 |
+| 6 | Cancel latency | **1,744 ms** abort → engine idle (231 ms in another arm; batch-bound) | §8 |
+| 7 | Crash mid-generation, recovery | SIGKILL → 0 orphans, file untouched, respawn ready in **6,080 ms**, answers normally | §8 |
+| 10 | `-lm/--load-mode` arms | mmap/auto = 1,722 MB private + reclaimable file pages; none/mlock = **2,338 MB committed**. Order-confounded on time, not on RAM | §5 |
 
-Item 3 and 8 are the two that decide whether the product premise works on this laptop. Everything
-else is optimisation. Neither is reachable without weights, which is why the honest reading of M1 is
-that the premise test still has not happened — the infrastructure around it now has.
+Still open after this checkpoint, in priority order:
+
+8. Concurrent indexing: embedding batch while a chat runs — does chat throughput collapse? Needs a
+   second model file, so needs a fresh authorisation.
+9. SSD-versus-HDD cold start, isolated. The two numbers in row 1 differ by cache state, not by disk,
+   and separating them needs either elevation (drop the standby list) or the same file copied to C:.
+11. Prompt-cache reuse across turns: every measured run reported `cached_tokens: 0` because each was
+    the first request. **This is now the most valuable unmeasured number in the project** — row 3's
+    36.6 s TTFT is only survivable if a follow-up turn reuses the cache.
+12. Which `ggml-cpu-*.dll` the loader picks at runtime (expected haswell; the line was not captured).
+13. Sustained 5- and 10-minute generation. Three minutes showed a 12% decline, which may be the
+    beginning of a slope or the whole of it.
+
+Item 3 and item 11 are the two that decide whether the product premise works on this laptop, and both
+now have a first answer: the premise **survives** at 4.9 t/s for short-context chat, and it is
+**threatened** by prefill, not by decode. `MEASUREMENTS.md` §11 states the verdict with its
+qualifications.
 
 ---
 
@@ -307,8 +361,15 @@ that the premise test still has not happened — the infrastructure around it no
 | Startup timeout | `/health` not ready in budget | terminate, mark failed, allow one retry | Chat: "model did not become ready" with the log tail |
 | Mid-generation crash | process exit / connection drop | mark job failed, restart lazily | Chat: partial answer marked incomplete; Activity error row |
 | Port collision | bind failure | pick another port, retry once | none visible (internal), logged |
-| OOM kill | exit code + Windows event | unload model, set admission floor lower for the session | Model Manager: model unloaded with reason |
+| OOM kill | exit code + Windows event | terminate and respawn at a lower context, then set the session admission floor lower | Model Manager: model unloaded with reason |
 | Orphan process | pid from a previous session alive | kill on next launch | none, logged |
+
+Two rows changed after checkpoint 4. **The OOM row can no longer say "unload model"**, because there is
+no unload route in b12189 (§1.4): releasing the weights means ending the process, so the UI must expect
+the full 6–38 s start cost (§3, §6 row 1) on the other side of every "unloaded" state. And **the startup
+budget is now a measured number, not a guess**: `/health` was ready at 6.0–10.0 s with a warm file cache
+and 38.0 s cold, so a 30 s budget would have failed a legitimate cold start — the budget needs to be at
+least 90 s for the first load of a session, with the UI showing which phase it is in.
 
 The orphan case is worth stating explicitly because it is the classic sidecar bug: a crash that
 leaves `llama-server.exe` holding 5 GB of RAM with no owner. The core records the pid and start time
@@ -351,12 +412,14 @@ folder ships — the 9.7 KB exe is meaningless without its `-impl.dll`.
    `cl` compile against `<windows.h>` (`ARCHITECTURE.md` §1 checkpoint, `DECISION_LOG.md` D-028).
    The installer flagged that a reboot is required; nothing observed so far depends on one, but the
    next session should start with it.
-4. A weights folder path chosen by the owner (no download implied). **Still open, and it is now the
-   only thing standing between this checkpoint and the numbers in §6.**
+4. ~~A weights folder path chosen by the owner~~ **Done 2026-11-07** — the owner authorised exactly one
+   model file and chose `D:\NEXUS-MODELS\`. `Llama-3.2-3B-Instruct-Q4_K_M.gguf` is there, verified to
+   the publisher's digest, and is what §6's numbers were measured with.
 
-Items 1–3 are done. What remains unauthorised is a model file (D-022), `src-tauri/`, and the first
-crates.io fetch — none of which happened here. The engine has been run only in its weightless state,
-so nothing in this section should be read as an inference measurement.
+Items 1–4 are done. What remains unauthorised is `src-tauri/` and the first crates.io fetch — neither
+happened here. The engine has now been run with real weights, so the §6 numbers are inference
+measurements on this hardware, but no NEXUS app code has executed any of them yet: the harness that
+produced them is a scratch Node script outside the repository.
 
 ---
 
@@ -367,6 +430,12 @@ so nothing in this section should be read as an inference measurement.
   read via `--version`, `--help` (753 lines, saved to
   `C:\Users\BS\nexus-toolchain\serve-help-b12189.txt`), `llama.exe help all`, folder listing, and two
   live weightless runs whose HTTP and `netstat` output is quoted above.
+- **The weights file** (primary for §6): `D:\NEXUS-MODELS\Llama-3.2-3B-Instruct-Q4_K_M.gguf`, 2,019,377,440
+  bytes, sha256 `e4f1a04d…210d9a` matched against the publisher's `lfs.oid`, read with
+  `llama-bench.exe -o json` and with the harness `C:\Users\BS\nexus-toolchain\srv1.mjs`; all raw run
+  output under `C:\Users\BS\nexus-toolchain\runs\`, transcribed into `MEASUREMENTS.md`.
+- [Hugging Face model tree API](https://huggingface.co/lmstudio-community/Llama-3.2-3B-Instruct-GGUF) —
+  used to obtain the digest and byte size that the GitHub release assets do not publish.
 - [llama.cpp releases API (ggml-org)](https://api.github.com/repos/ggml-org/llama.cpp/releases) —
   tag list, publish times, asset names and sizes; used to pin b12189 and confirm it was newest.
   Note it exposed no asset digests, which is why §1 states the provenance caveat.
