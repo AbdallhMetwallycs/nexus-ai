@@ -182,7 +182,12 @@ sweep (0 errors) and re-capturing `1920x1080-knowledge.png` + `1280x720-knowledg
 ## 6. Files created
 
 **Project root** — `package.json`, `tsconfig.json`, `tsconfig.node.json`, `vite.config.ts`,
-`tailwind.config.js`, `postcss.config.js`, `index.html`, `.gitignore`
+`tailwind.config.js`, `postcss.config.js`, `index.html`
+
+*Correction added at Phase 2 start:* this report originally listed `.gitignore` among the Phase 1
+files. It was not created in Phase 1 — the project had no version control until `git init` and the
+`.gitignore` landed as the first Phase 2 M0 step (baseline commit `84cb1a8`). The claim was wrong
+when written; the file exists now for a different reason.
 
 **Documentation** — `README.md`, `UI_DESIGN_SYSTEM.md`, `UI_COMPONENTS.md`, `UI_SCREEN_MAP.md`,
 `DECISION_LOG.md`, `CONVENTIONS.md`, `PHASE_1_COMPLETION_REPORT.md` (this file)

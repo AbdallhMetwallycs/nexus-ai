@@ -104,9 +104,50 @@ Documents whose folder has no named collection fall back to this label. As
 like a counting bug in a screen whose whole job is honest accounting.
 *Why:* the rail must be readable without cross-checking the code.
 
+## Phase 2 decisions (owner-approved 2026-11-07)
+
+**D-019 — Phase 2 gate opened.** The owner sent `APPROVE UI — START PHASE 2` on 2026-11-07.
+Phase 2 work is authorised, scoped by the M0 decision below. *Why:* recorded so the exact
+authorisation moment is auditable rather than inferred from a conversation.
+
+**D-020 — Inference runtime: llama.cpp sidecar.** Chosen over Ollama-as-provider and over a remote
+API. The engine runs as a supervised child process bound to `127.0.0.1` with a per-launch token.
+*Why:* control of quantization, thread count, context cap, and the RAM admission check; weights
+stay in an owner-visible folder; a remote provider contradicts the offline-first premise.
+Consequence: Rust and MSVC build tools become prerequisites, and the engine is acquired as a
+pinned prebuilt archive rather than compiled from source.
+
+**D-021 — M0 is documents only; no installs, no downloads, no scaffold.** The owner chose the
+docs-lock path over "contract plus scaffold now". *Why:* the architecture decisions (process
+topology, schema, policy invariants) are cheap to change on paper and expensive to change after
+`src-tauri/` exists.
+
+**D-022 — No model weights on this machine yet.** The owner declined the 7B Q4 and the 3B options
+for now. *Why:* a 2–5 GB download is the first irreversible-ish disk commitment in the project and
+it should follow the runtime verification, not precede it. Consequence: M1's first step is verifying
+the pinned llama.cpp archive's actual contents and `--help`, because the current unified
+`llama serve` binary shape rests on one third-party source.
+
+**D-023 — Version control established at the Phase 1 boundary.** `git init` plus `.gitignore`,
+baseline commit `84cb1a8` covering the verified Phase 1 UI and the Phase 2 plan; local only, no
+remote. `dist/` and `node_modules/` are ignored; screenshots are committed as evidence.
+*Why:* every Phase 2 gate needs a known-good tag to compare against. Side effect found and
+corrected: `PHASE_1_COMPLETION_REPORT.md` had listed `.gitignore` among Phase 1 files, which was
+not true until this commit — the report now says so.
+
+**D-024 — Environment measured, not assumed, before writing the plan.** Probed 2026-11-07:
+git 2.45.1 ✓, node v24.17.0 ✓, npm 11.13.0 ✓, `rustc`/`cargo`/`cmake`/`cl` **all absent**, `D:` =
+252 GB total with 149 GB free. *Why:* the missing toolchain is the real M1 cost and the 512 GB /
+143 GB figure in the Phase 1 mock profile describes C:, not the volume that will hold app data —
+both facts change the plan and neither was knowable from the code.
+
 ## Deferred (explicitly not in Phase 1)
 
 LLM runtime (Ollama/llama.cpp), backend/API, databases, persistent memory,
 real agent execution, internet/search/download, model training/fine-tuning, Tauri
 build scripts. These are architecture-compatible and documented in the README's
 integration section, but were not implemented, per the brief.
+
+**Status update 2026-11-07:** Phase 2 opened (D-019), so the first group of these is now in
+progress by design. Fine-tuning and any weight modification remain deferred indefinitely — that
+item is a product boundary, not a schedule.

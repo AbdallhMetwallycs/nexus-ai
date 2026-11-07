@@ -72,6 +72,9 @@ src/
   theme/ThemeContext     dark/light theme (dark is initial)
 docs: CONVENTIONS.md, UI_DESIGN_SYSTEM.md, UI_COMPONENTS.md, UI_SCREEN_MAP.md,
       DECISION_LOG.md, PHASE_1_COMPLETION_REPORT.md
+phase 2 (design only): PHASE_2_ARCHITECTURE_PLAN.md, ARCHITECTURE.md,
+      PHASE2_IPC_CONTRACT.md, PHASE2_DATA_MODEL.md, PHASE2_POLICY_MODEL.md,
+      PHASE2_SIDECAR_SPEC.md, PHASE2_MILESTONES.md
 ```
 
 ## Mock-data limitations (honesty contract)
@@ -84,7 +87,7 @@ docs: CONVENTIONS.md, UI_DESIGN_SYSTEM.md, UI_COMPONENTS.md, UI_SCREEN_MAP.md,
 - State lives in React memory (plus theme in localStorage) — a reload resets it.
 - The Model Manager's Installed tab is intentionally **empty**: no model exists.
 
-## Future backend integration points (Phase 2 — not started)
+## Phase 2 integration points (designed at M0, not implemented)
 
 Every screen consumes plain typed arrays from `src/data/*` and calls plain
 setters; the intended seams are:
@@ -96,5 +99,16 @@ setters; the intended seams are:
 - Memory/Knowledge/Activity writes → local storage + indexing service.
 - Tauri commands replace the "simulated" action handlers 1:1.
 
+The Phase 2 design set, written 2026-11-07 after the owner's approval and containing
+**no implemented code**:
+
+- `PHASE_2_ARCHITECTURE_PLAN.md` — the proposal the owner reviewed.
+- `ARCHITECTURE.md` — process topology, subsystems, concurrency, measured environment.
+- `PHASE2_IPC_CONTRACT.md` — typed command surface and the 44-row simulated-action ledger.
+- `PHASE2_DATA_MODEL.md` — SQLite schema design, migrations, retention.
+- `PHASE2_POLICY_MODEL.md` — offline/approval/permission enforcement and its 10 invariants.
+- `PHASE2_SIDECAR_SPEC.md` — llama.cpp acquisition, supervision, measurement checklist.
+- `PHASE2_MILESTONES.md` — M0–M6 exit gates and the authorisation checkpoints.
+
 See `PHASE_1_COMPLETION_REPORT.md` for the full completion evidence and
-`DECISION_LOG.md` for rationale.
+`DECISION_LOG.md` for rationale (D-019 onward records the Phase 2 decisions).
