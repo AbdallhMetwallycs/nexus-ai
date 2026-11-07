@@ -79,13 +79,47 @@ not against prose.
 
 ---
 
+### M1.0 — Toolchain prerequisite *(done 2026-11-07, owner-authorised)*
+
+**Scope:** authorisation checkpoints 1 and 2 only — the Rust toolchain and the MSVC C++ workload.
+The owner's instruction was "先授权安装 Rust 和 MSVC Build Tools", then the scope was fixed at
+"verify and document this checkpoint, then stop".
+
+**Decisions taken at the checkpoint (D-028, D-029):** add the C++ workload to the existing Visual
+Studio Community 2026 instance rather than installing Build Tools beside it; let the installer pick
+the Windows SDK; D-022 (no model weights) held.
+
+**Exit gate — all recorded, plain shell, no dev command prompt:**
+```
+rustc -vV                    → 1.99.1 (58cf8f9c3 2026-10-13), host x86_64-pc-windows-msvc, LLVM 23.1.1
+cargo build   (scratch crate) → Finished dev profile in 5.49s, exit 0
+linktest.exe                 → "rust-msvc-link-ok 7596", exit 0     ← proves cargo links against MSVC
+cargo clippy --all-targets   → exit 0
+cl <windows.h> probe         → compiled + ran "cl-sdk-probe pid=18264", and again linked against
+                               user32.lib → pid=10436 → ALL-CL-PROBES-PASSED, exit 0
+```
+
+**Footprint:** VS instance 9.09 GB (VC Tools 2.40 GB, Windows Kits 2.12 GB), `.rustup` 1.30 GB,
+cargo bin 0.17 GB, package cache 4.76 GB. C: free 99.4 → **83.9 GB**; D: free 148.6 GB.
+
+**Open flag:** the installer log ends `Exit Code: 0` but also records *"Updating instance state that a
+reboot is required"*. Every verification above passed without rebooting; treat a reboot as the first
+action of the next working session.
+
+**Explicitly not in M1.0:** no llama.cpp archive download, no model weights, no `src-tauri/`, no crate
+fetched from crates.io, no npm dependency added. All scratch artefacts live outside the repo, under
+`C:\Users\BS\nexus-toolchain\`.
+
+---
+
 ### M1 — One real answer, end to end
 
 **Scope:** Tauri scaffold; sidecar supervisor; model registry reading real GGUF metadata; RAM
 admission check; token streaming into the existing Chat screen; stop/cancel.
 
-**Prerequisite checkpoints:** Rust + MSVC build tools install; pinned llama.cpp archive download;
-one model file (owner chooses; nothing downloaded without that choice).
+**Prerequisite checkpoints:** ~~Rust + MSVC build tools install~~ **done at M1.0**; pinned llama.cpp
+archive download; one model file (owner chooses; nothing downloaded without that choice) — **both
+still unauthorised**.
 
 **Deliverables:** `src-tauri/`, `crates/nexus-core` with `engine`, `registry`, `admission`,
 `inference` modules; the Rust mirror of `src/contract/` (already written at M0.5 — M1 implements it,
@@ -206,8 +240,8 @@ cold start to first ready model         → measured and recorded
 
 | # | Action | Writes | Needed at |
 |---|---|---|---|
-| 1 | Install Rust toolchain | `%USERPROFILE%\.cargo`, `.rustup` | M1 |
-| 2 | Install MSVC Build Tools | several GB under `Program Files (x86)` | M1 |
+| 1 | Install Rust toolchain | `%USERPROFILE%\.cargo`, `.rustup` | **done 2026-11-07 (M1.0)** |
+| 2 | Install MSVC C++ workload | 9.09 GB in the existing VS Community 2026 instance | **done 2026-11-07 (M1.0)** |
 | 3 | Download pinned llama.cpp archive | `sidecar\b12189\` | M1 |
 | 4 | Download a model file | 2–5 GB in the owner's weights folder | M1 |
 | 5 | Add npm/Cargo dependencies | `node_modules`, registry cache | each milestone |
@@ -217,7 +251,9 @@ cold start to first ready model         → measured and recorded
 | 9 | Run a Windows installer build | `src-tauri\target\` | M6 |
 | 10 | Create a GitHub remote / push | off-machine copy | only if you ask |
 
-Items 1–4 are the M1 gate and are the reason M0 stayed documents-only.
+Items 1–4 are the M1 gate. 1 and 2 are paid; **3 and 4 are the remaining unauthorised downloads**, and
+item 5 has not been exercised yet either — no crate has been fetched from crates.io, so the first
+`cargo` build that pulls Tauri dependencies is itself a checkpoint, not a background step.
 
 ---
 

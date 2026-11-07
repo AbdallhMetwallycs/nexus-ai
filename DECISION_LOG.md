@@ -140,6 +140,7 @@ git 2.45.1 ✓, node v24.17.0 ✓, npm 11.13.0 ✓, `rustc`/`cargo`/`cmake`/`cl`
 252 GB total with 149 GB free. *Why:* the missing toolchain is the real M1 cost and the 512 GB /
 143 GB figure in the Phase 1 mock profile describes C:, not the volume that will hold app data —
 both facts change the plan and neither was knowable from the code.
+*Superseded on the toolchain half by D-028; the probe method stands.*
 
 **D-025 — The IPC contract is materialised as types before any runtime exists.** Owner chose
 "materialise the IPC contract now" over waiting for M1. `src/contract/ipc.ts` holds the 96 commands and
@@ -170,6 +171,36 @@ accepts the call, so `chat.list()` and `chat.list({ query: 'auth' })` are both l
 conversations would make the list's cost grow with the chat history on a 15 W CPU. Found while
 materialising the contract: the code needed the projection before the document described it, and the
 document was corrected in the same commit rather than left to rot.
+
+**D-028 — The owner authorised the Rust + MSVC install, scoped to "verify, document, stop".** The
+instruction was "先授权安装 Rust 和 MSVC Build Tools" — authorisation checkpoints 1 and 2 from
+`PHASE2_MILESTONES.md` §3, and nothing else. Chosen at the same time: add the C++ workload to the
+**existing** Visual Studio Community 2026 instance (18.11.2, instance `bcdd2c05`) instead of installing
+Build Tools beside it, and let the installer pick the Windows SDK. Then the checkpoint scope was fixed
+as "verify + document, then stop" and D-022 held ("still none — verify the runtime with no weights").
+*Why it matters:* the M0 probe (D-024) recorded `rustc`/`cargo`/`cmake`/`cl` as absent, which was true
+that morning and would have sent M1 looking for an install that already existed. Measured after the
+install: rustc 1.99.1 (58cf8f9c3), cargo 1.99.1, rustup 1.29.3, host `x86_64-pc-windows-msvc`, LLVM
+23.1.1, cl 19.51.36260 / MSVC toolset 14.51.36231, Windows SDK 10.0.26100.0. Three proofs, all in a
+plain shell: `cargo build` + run (exit 0, live PID printed — cargo links against MSVC), `cargo clippy
+--all-targets` (exit 0), and `cl` compiling and running a `<windows.h>` program that called
+`GetCurrentProcessId()`, relinked against `user32.lib`. Cost: VS instance 9.09 GB, `.rustup` 1.30 GB,
+package cache 4.76 GB; C: free 99.4 → 83.9 GB. The installer log ends `Exit Code: 0` while also
+recording *"Updating instance state that a reboot is required"* — unverified either way, so the next
+session reboots first.
+
+**D-029 — VS 2026 renamed the C++ workload, and the installer reported success while installing nothing.**
+`setup.exe modify --add Microsoft.VisualStudio.Workload.VCTools` returned **exit 0** and did nothing;
+the log said "Cannot find package … in product graph. These package IDs weren't found… They may have
+been renamed". The authoritative id came from the channel manifest (`VisualStudio.vsman`):
+**`Microsoft.VisualStudio.Workload.NativeDesktop`**. Two more CLI facts: `setup.exe modify` rejects
+`--wait` (exit 87, "Option 'wait' is unknown"), so completion must be detected from installed
+artefacts; and `cmake`/`ninja` are not global commands but ship inside the instance, so a source build
+has to run in the VS environment — the verified paths are
+`…\VS\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe` and
+`…\Microsoft\CMake\Ninja\ninja.exe`, and `where cmake` still finds nothing. *Why this is a decision and not a footnote:* it changes the standing
+rule for every future install step — **an installer's exit code is not evidence; the artefact is** — and
+that rule is what turns "installed" claims in this project's docs into checkable statements.
 
 ## Deferred (explicitly not in Phase 1)
 

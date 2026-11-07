@@ -33,7 +33,7 @@ state which binaries the zip contains, so the assumption is not yet supportable.
 | Path | Requirement | Cost | Verdict |
 |---|---|---|---|
 | Prebuilt `bin-win-cpu-x64` asset | none beyond download authorisation | ~tens of MB | **primary** — works with the toolchain we actually have |
-| Build from source | CMake + MSVC + Ninja, none installed today | several GB install, maintenance of our own build | deferred; only if a flag we need is missing from the prebuilt |
+| Build from source | CMake + MSVC + Ninja — available since the 2026-11-07 checkpoint (MSVC 14.51.36231; CMake and Ninja ship inside the VS 2026 instance, not on PATH) | no new install, but our own build and its flag matrix | deferred; only if a flag we need is missing from the prebuilt |
 | Ollama as provider | external app dependency | loses control of weights and threading | not chosen (owner decision), kept behind the same provider interface |
 
 Pinning rules: one exact release tag per app version; the SHA-256 of the downloaded archive is
@@ -186,12 +186,18 @@ reinstall, and it is the reason the checksum record in `DECISION_LOG.md` matters
    Vulkan build is the starting point; recommendation is CPU).
 2. The archive's actual contents and `--help` are recorded here, replacing the unverified unified-
    binary assumption from §1.
-3. Rust + MSVC build tools installed for Tauri — a separate authorisation, since it is a system
-   install.
+3. ~~Rust + MSVC build tools installed for Tauri — a separate authorisation, since it is a system
+   install.~~ **Satisfied 2026-11-07.** The owner authorised exactly this install; Rust 1.99.1 and
+   MSVC 14.51.36231 with Windows SDK 10.0.26100.0 are in place and verified by a cargo link and an
+   `cl` compile against `<windows.h>` (`ARCHITECTURE.md` §1 checkpoint, `DECISION_LOG.md` D-028).
+   The installer flagged that a reboot is required; nothing observed so far depends on one, but the
+   next session should start with it.
 4. A weights folder path chosen by the owner (no download implied).
 
-Items 1–4 are all installs or downloads. Per the owner's M0 decision, none of them happen until
-this document set is approved.
+Items 1 and 4 are still unauthorised downloads, and item 2 can only be completed after item 1. Item 3
+is done, and its checkpoint deliberately stopped there: no llama.cpp archive was downloaded, no
+`src-tauri/` scaffold was created, and no crate was fetched from crates.io, because the owner scoped
+the authorisation to "verify and document, then stop".
 
 ---
 

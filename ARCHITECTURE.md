@@ -15,20 +15,47 @@ to produce it.
 | `git --version` | 2.45.1.windows.1 | Baseline repo created; Phase 2 steps are revertible |
 | `node --version` | v24.17.0 | Meets Tauri 2 + Vite requirements |
 | `npm --version` | 11.13.0 | Fine |
-| `rustc --version` | **not found** | **M1 blocker** — Tauri core cannot be built until Rust is installed |
-| `cargo --version` | **not found** | Same |
-| `cmake` | **not found** | Blocks building llama.cpp from source |
-| `cl` (MSVC) | **not found** | Blocks both llama.cpp source builds and Tauri's Windows link step |
-| `D:` volume | 252 GB total, **149 GB free** (41% used) | Ample for weights; note the app volume differs from the mock profile |
+| `rustc --version` | 1.99.1 (58cf8f9c3 2026-10-13), host `x86_64-pc-windows-msvc`, LLVM 23.1.1 | **Installed after the M0 lock** — see the checkpoint below; Tauri core is buildable |
+| `cargo --version` | 1.99.1 (5f94df478 2026-08-27) | Same |
+| `cmake` | Not a global command; the VS 2026 instance ships its own (`CMake tools for Visual Studio`) | Source builds must invoke it through the VS environment, not PATH |
+| `cl` (MSVC) | 19.51.36260 (toolset 14.51.36231) via `vcvars64.bat`; Windows SDK 10.0.26100.0 | Present since the checkpoint; not on a plain PATH by design |
+| `D:` volume | 252 GB total, **~148.6 GB free** | Ample for weights; note the app volume differs from the mock profile |
+| `C:` volume | **83.9 GB free** after the toolchain install (was 99.4 GB) | The toolchain landed on C:; ~15.5 GB consumed |
 | Reference CPU/RAM | i5-8250U 4C/8T ~15 W sustained, 20 GB soldered, UHD 620 + MX150 4 GB | Dominant design constraint |
+
+**Checkpoint M1.0 — toolchain prerequisite (2026-11-07, owner-authorised; see `DECISION_LOG.md`
+D-028/D-029 and `PHASE2_MILESTONES.md` M1.0):**
+the original M0 probe was correct at the time and is now superseded. The real finding was that
+Visual Studio Community 2026 (18.11.2, instance `bcdd2c05`) was **already installed without a C++
+workload**, so the plan was to modify that instance rather than install Build Tools alongside it.
+Three results from that operation are worth keeping:
+
+1. Adding `Microsoft.VisualStudio.Workload.VCTools` exits 0 and installs nothing — the id was renamed
+   in VS 2026. The authoritative id came from the channel's `VisualStudio.vsman`:
+   **`Microsoft.VisualStudio.Workload.NativeDesktop`**. Never trust a 0 exit code from the installer;
+   check the artefact.
+2. `setup.exe modify` rejects `--wait` (exit 87), so completion is detected from the installed
+   packages, not the process.
+3. `rustc` 1.99.1 finds the v18 MSVC install on its own — **no `vcvars` wrapper is needed for cargo
+   builds**, which removes a whole class of environment bugs from the Tauri build path. `cl` itself
+   still needs `vcvars64.bat`.
+
+Verification output (plain shell, no dev command prompt): `cargo build` finished in 5.49 s and the
+binary printed a live PID; `cargo clippy --all-targets` exited 0; and `cl` compiled and ran a
+`<windows.h>` program that called `GetCurrentProcessId()`, then relinked it against `user32.lib`.
+Footprint: VS instance 9.09 GB (of which VC Tools 2.40 GB, Windows Kits 2.12 GB), `.rustup` 1.30 GB,
+cargo package cache 4.76 GB. The installer log ends `Exit Code: 0` but also records
+**"Updating instance state that a reboot is required"**, so the next working session should start with a
+reboot even though everything verified without one.
 
 Two findings worth stating plainly:
 
-**The Windows toolchain gap is the first real Phase 2 cost.** Tauri 2 needs the MSVC build tools
-and Rust; a source-built llama.cpp needs CMake plus the same MSVC compiler. Either we install
-Visual Studio Build Tools (~several GB, needs your authorization and a reboot-class install), or we
-run the sidecar from an official prebuilt llama.cpp release binary and defer the source build.
-The prebuilt path is the smaller ask and is what §7 recommends.
+**The Windows toolchain gap was the first real Phase 2 cost, and it is now paid.** Tauri 2 needs the
+MSVC build tools and Rust; a source-built llama.cpp needs CMake plus the same MSVC compiler. The
+owner authorised the Rust + MSVC half on 2026-11-07 (checkpoint above). The remaining question is
+unchanged: whether the sidecar is built from source or run from an official prebuilt llama.cpp
+release binary. The prebuilt path stays the smaller ask and is what §7 recommends — the compiler we
+now have makes a source build *possible*, not necessary.
 
 **The Phase 1 mock hardware profile is not this volume.** `HARDWARE_PROFILE` describes a 512 GB
 disk with 143 GB free — that matches the machine's C: drive, not D:, which measures 252 GB / 149 GB
@@ -177,10 +204,11 @@ no benefit.
 
 M1's exit is one real streamed local answer in the existing Chat screen. Ordered steps:
 
-1. **Prerequisite (needs your authorization — installs):** Rust toolchain + Windows MSVC build
-   tools for Tauri. For the engine, use an **official prebuilt llama.cpp release binary** rather
-   than compiling from source, since CMake and MSVC are absent. This keeps the install footprint to
-   what Tauri strictly requires and defers source building.
+1. **Prerequisite — DONE 2026-11-07 (§1 checkpoint):** Rust toolchain + Windows MSVC build tools
+   for Tauri, authorised and installed by the owner. The engine still uses an **official prebuilt
+   llama.cpp release binary** rather than compiling from source; that choice was made because the
+   prebuilt is the smaller ask, and having a compiler now does not change it. The archive download
+   remains unauthorised.
 2. `src-tauri/` scaffold, `beforeBuildCommand` wired to the existing Vite build, `base: './'` +
    `HashRouter` preserved so nothing in the UI changes.
 3. Sidecar supervisor: locate binary, verify version, pick a free port, launch with the token,

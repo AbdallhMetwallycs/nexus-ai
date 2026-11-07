@@ -12,6 +12,11 @@ memory, specialized agents, local tools, Learning Lab, and optional internet.
 > imports yet — so the running app is unchanged from Phase 1. Each later step is
 > gated by the authorisation checkpoints in `PHASE2_MILESTONES.md`; nothing
 > installs, downloads, or deletes without the owner's go-ahead.
+>
+> **Machine state, not repository state:** on 2026-11-07 the owner authorised the Rust + MSVC
+> toolchain install (checkpoint M1.0, `DECISION_LOG.md` D-028). That is a build prerequisite only —
+> no Tauri scaffold, no llama.cpp binary, no model weight, and nothing in this repo changed except
+> documentation.
 
 ## Run it
 
