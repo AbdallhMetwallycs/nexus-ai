@@ -141,6 +141,36 @@ git 2.45.1 ✓, node v24.17.0 ✓, npm 11.13.0 ✓, `rustc`/`cargo`/`cmake`/`cl`
 143 GB figure in the Phase 1 mock profile describes C:, not the volume that will hold app data —
 both facts change the plan and neither was knowable from the code.
 
+**D-025 — The IPC contract is materialised as types before any runtime exists.** Owner chose
+"materialise the IPC contract now" over waiting for M1. `src/contract/ipc.ts` holds the 96 commands and
+10 event channels; `src/contract/client.ts` holds `NexusTransport`, a dependency-free structural probe
+for a Tauri-style host, and the honest transport that answers every call with `not_implemented` and
+never fires a subscription. No screen imports either file, and `package.json` is unchanged.
+*Why:* a contract that only exists as prose gets re-litigated at implementation time; as types it is
+checked by the compiler on every commit from now on. Verified 2026-11-07: `tsc --noEmit` exit 0,
+`npm run build` exit 0 with the **same output hashes as Phase 1** (`index-o-Cdud1n.js` 425.85 kB,
+`index-B__IBTZ4.css` 33.04 kB, 1613 modules) — byte-identical bundle is the proof that adding the
+seam changed no screen. Runtime and type-level checks were run from scratch files in a temp directory
+(so the repo gained no test dependency): the honest transport refused 2 sampled commands with
+`not_implemented`, a stubbed host bridge routed calls and unwrapped event payloads correctly, a raw
+string rejection degraded to `internal` rather than a fake success, and 7 deliberate misuse attempts
+(`engine.status` with args, `model.get` without id, unknown command, unknown field, unknown result
+field) all failed to compile.
+
+**D-026 — Argument presence is derived, not declared per command.** `ArgsTuple` maps `args: undefined`
+to a parameter that does not exist, an args type whose every field is optional to an optional object,
+and anything else to a required parameter. *Why:* the alternative — writing `args?` on 96 rows — lets
+the signature and the call site drift. `{} extends A` is the same test the compiler applies when it
+accepts the call, so `chat.list()` and `chat.list({ query: 'auth' })` are both legal while
+`model.get()` without an id is a compile error. Documented in `PHASE2_IPC_CONTRACT.md` §1.
+
+**D-027 — `chat.list` returns `ConversationSummary`, not `Conversation`.** The list projection drops
+`messages` and adds `messageCount`. *Why:* the sidebar row renders only
+`"{messages.length} msg · {timeAgo(updatedAt)}"` (`src/pages/Chat.tsx:264`), so shipping full
+conversations would make the list's cost grow with the chat history on a 15 W CPU. Found while
+materialising the contract: the code needed the projection before the document described it, and the
+document was corrected in the same commit rather than left to rot.
+
 ## Deferred (explicitly not in Phase 1)
 
 LLM runtime (Ollama/llama.cpp), backend/API, databases, persistent memory,

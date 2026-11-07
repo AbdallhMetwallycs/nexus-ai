@@ -4,12 +4,14 @@
 standalone local AI agent platform: local models, offline operation, persistent
 memory, specialized agents, local tools, Learning Lab, and optional internet.
 
-> **Status — STOP CONDITION ACTIVE.**
-> This repository contains **frontend only**. There is no LLM runtime, no
-> Ollama/llama.cpp, no backend, no database, no real agent engine, no web
-> access, and no training pipeline — by design. All data is mock data labeled
-> on screen. Phase 2 begins only after written approval
-> (`APPROVE UI — START PHASE 2`).
+> **Status — Phase 2 open (approved 2026-11-07), still frontend only.**
+> This repository contains **no LLM runtime, no Ollama/llama.cpp, no backend, no
+> database, no real agent engine, no web access, and no training pipeline**. All
+> screen data is mock data, labelled on screen. What Phase 2 has added so far is
+> design documents plus the typed IPC contract in `src/contract/`, which nothing
+> imports yet — so the running app is unchanged from Phase 1. Each later step is
+> gated by the authorisation checkpoints in `PHASE2_MILESTONES.md`; nothing
+> installs, downloads, or deletes without the owner's go-ahead.
 
 ## Run it
 
@@ -87,11 +89,13 @@ phase 2 (design only): PHASE_2_ARCHITECTURE_PLAN.md, ARCHITECTURE.md,
 - State lives in React memory (plus theme in localStorage) — a reload resets it.
 - The Model Manager's Installed tab is intentionally **empty**: no model exists.
 
-## Phase 2 integration points (designed at M0, not implemented)
+## Phase 2 integration points (designed at M0; types exist, wiring does not)
 
 Every screen consumes plain typed arrays from `src/data/*` and calls plain
 setters; the intended seams are:
 
+- `src/contract/` → the seam itself, now typed: commands, events, `Result<T>` envelope,
+  and a transport that returns `not_implemented` until a core exists.
 - `src/data/*` → repository/API layer (same types, fetched instead of literal).
 - `src/state/PlatformContext` → real runtime status (model engine, telemetry).
 - Chat send/regenerate → streaming inference client (keep the simulated
@@ -99,16 +103,23 @@ setters; the intended seams are:
 - Memory/Knowledge/Activity writes → local storage + indexing service.
 - Tauri commands replace the "simulated" action handlers 1:1.
 
-The Phase 2 design set, written 2026-11-07 after the owner's approval and containing
-**no implemented code**:
+The Phase 2 design set, written 2026-11-07 after the owner's approval:
 
 - `PHASE_2_ARCHITECTURE_PLAN.md` — the proposal the owner reviewed.
 - `ARCHITECTURE.md` — process topology, subsystems, concurrency, measured environment.
-- `PHASE2_IPC_CONTRACT.md` — typed command surface and the 44-row simulated-action ledger.
+- `PHASE2_IPC_CONTRACT.md` — typed command surface (96 commands, 10 event channels) and the
+  44-row simulated-action ledger.
 - `PHASE2_DATA_MODEL.md` — SQLite schema design, migrations, retention.
 - `PHASE2_POLICY_MODEL.md` — offline/approval/permission enforcement and its 10 invariants.
 - `PHASE2_SIDECAR_SPEC.md` — llama.cpp acquisition, supervision, measurement checklist.
 - `PHASE2_MILESTONES.md` — M0–M6 exit gates and the authorisation checkpoints.
+
+**One exception to "design only", added 2026-11-07:** `src/contract/` now holds the IPC
+contract as TypeScript — `ipc.ts` (types + `CommandSpecs`/`EventSpecs`), `client.ts`
+(`NexusTransport`, host-bridge probe, and a transport that answers every call with
+`not_implemented`), `index.ts` (barrel). It is **dead code on purpose**: no screen imports it,
+the production bundle is byte-identical to Phase 1, and no dependency was added. Real wiring is
+M1/M2. Everything above the line is still pure design.
 
 See `PHASE_1_COMPLETION_REPORT.md` for the full completion evidence and
 `DECISION_LOG.md` for rationale (D-019 onward records the Phase 2 decisions).

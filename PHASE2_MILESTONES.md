@@ -50,6 +50,35 @@ owner approval of this document set   → recorded in DECISION_LOG.md
 
 ---
 
+### M0.5 — Contract materialised as types *(done 2026-11-07, owner's choice)*
+
+The owner chose to turn `PHASE2_IPC_CONTRACT.md` into TypeScript rather than wait for M1, on the
+condition that nothing else move: no dependency, no `src-tauri/`, no screen change, no download.
+
+**Deliverables:** `src/contract/ipc.ts` (96 commands in `CommandSpecs`, 10 channels in `EventSpecs`,
+`Result<T>`/`NexusError`/`ErrorCode`, all Phase 1 shapes reused verbatim), `src/contract/client.ts`
+(`NexusTransport`, the dependency-free `window.__TAURI__` probe, the `not_implemented` transport, and
+error normalisation for a host that rejects with something off-contract), `src/contract/index.ts`.
+
+**Exit gate — recorded output:**
+```
+npx tsc --noEmit          → exit 0
+npm run build             → exit 0; 1613 modules; index-o-Cdud1n.js 425.85 kB; index-B__IBTZ4.css 33.04 kB
+                            (identical hashes to Phase 1 = the bundle could not have changed)
+grep for '@/contract'     → no importer outside src/contract/
+git diff package.json     → empty
+runtime check (temp dir)  → honest transport returns not_implemented for every command; subscriptions
+                            deliver 0 payloads; stubbed bridge routes calls, unwraps event payloads,
+                            and maps an off-contract rejection to 'internal'
+type checks (temp dir)    → 7 deliberate misuses all fail to compile; 1 correct usage set compiles
+```
+
+**Still true after M0.5:** every screen runs on mock data. The contract is reachable only from code
+that does not exist yet — which is the point: M1 now implements against types the compiler enforces,
+not against prose.
+
+---
+
 ### M1 — One real answer, end to end
 
 **Scope:** Tauri scaffold; sidecar supervisor; model registry reading real GGUF metadata; RAM
@@ -59,7 +88,8 @@ admission check; token streaming into the existing Chat screen; stop/cancel.
 one model file (owner chooses; nothing downloaded without that choice).
 
 **Deliverables:** `src-tauri/`, `crates/nexus-core` with `engine`, `registry`, `admission`,
-`inference` modules; `src/contract/ipc.ts` generated from the contract doc; `MEASUREMENTS.md` with
+`inference` modules; the Rust mirror of `src/contract/` (already written at M0.5 — M1 implements it,
+and any change to a shape updates both sides in one commit); `MEASUREMENTS.md` with
 the §6 checklist from `PHASE2_SIDECAR_SPEC.md` filled in.
 
 **Exit gate — all of these, with output recorded:**

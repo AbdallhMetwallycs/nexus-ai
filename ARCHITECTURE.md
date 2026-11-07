@@ -61,7 +61,8 @@ hosts the app data, and the Model Manager's disk-fit math changes accordingly.
 Three boundaries, each with one job:
 
 **UI ⇄ core (IPC).** The React screens never touch a file, a process, or a socket. They call typed
-commands and subscribe to typed events. The contract is in `PHASE2_IPC_CONTRACT.md`.
+commands and subscribe to typed events. The contract is in `PHASE2_IPC_CONTRACT.md`, materialised as
+types in `src/contract/` and imported by no screen yet.
 
 **Core ⇄ sidecar (HTTP over loopback).** OpenAI-compatible `/v1/chat/completions` plus native
 `/completion` for token streaming and control. The sidecar is disposable: the core starts it,

@@ -1,13 +1,16 @@
 # NEXUS AI — Phase 2 IPC Contract (M0 draft)
 
 **Doc:** typed command surface between the React UI and the Rust core
-**Written:** 2026-11-07 · **Status:** for owner approval before any implementation
+**Written:** 2026-11-07 · **Status:** design accepted; the TypeScript half is materialised, the Rust half is not
 **Source of truth for shapes:** `src/data/types.ts` — every Phase 1 interface is reused verbatim as
 the wire contract, so the UI's mock arrays and the core's real records are the same type.
 
-No code was generated from this document yet. In M1 the TypeScript half becomes
-`src/contract/ipc.ts` and the Rust half is mirrored by hand (or `ts-rs`), with this file as the
-specification both sides are checked against.
+The TypeScript side of this contract now exists as code: `src/contract/ipc.ts` (types, `CommandSpecs`,
+`EventSpecs`, envelope) and `src/contract/client.ts` (`NexusTransport`, the host-bridge probe, and the
+`not_implemented` transport that answers every call until a core is attached). **No screen imports
+either file yet** — the pages still run on their Phase 1 mock data. The Rust half is mirrored by hand
+(or `ts-rs`) at M1, with this document as the specification both sides are checked against. When a row
+here and a type in `src/contract/` disagree, that is a contract bug: fix both in one commit.
 
 ---
 
@@ -17,7 +20,10 @@ specification both sides are checked against.
 no overloaded `set`.
 
 **Transport.** Tauri `invoke(cmd, args)` for request/response; Tauri `emit`/`listen` for streams
-and progress. The UI never polls for state changes that the core can announce.
+and progress. The UI never polls for state changes that the core can announce. `src/contract/client.ts`
+reaches the host through a **structural probe** of `window.__TAURI__` (invoke + listen, no package
+import) so the contract compiles in a plain browser build; if either half is missing the app is treated
+as having no core and gets the `not_implemented` transport rather than half-working.
 
 **Envelope.** Every fallible command returns the same shape:
 
@@ -25,6 +31,10 @@ and progress. The UI never polls for state changes that the core can announce.
 type Result<T> =
   | { ok: true; data: T }
   | { ok: false; error: NexusError };
+
+interface Paged<T> { items: T[]; total: number }
+
+interface JobRef { jobId: string }         // every long command returns a handle, not a wait
 
 interface NexusError {
   code: ErrorCode;          // machine-readable, stable
@@ -37,11 +47,14 @@ type ErrorCode =
   | 'policy.offline'        | 'policy.approval_required'
   | 'policy.not_allowed'    | 'policy.root_denied'
   | 'engine.not_installed'  | 'engine.crashed'   | 'engine.busy'
+  | 'engine.not_ready'      // sidecar is up but not yet answering /health
   | 'model.not_found'       | 'model.not_installed' | 'model.ram_admission_failed'
   | 'model.corrupt'
   | 'job.cancelled'         | 'job.timeout'
   | 'store.corrupt'         | 'store.busy'
   | 'validation.field'      | 'validation.unknown_id'
+  | 'contract.mismatch'     // UI and core built against different contract versions
+  | 'internal'              // anything the core could not classify
   | 'not_implemented';      // honest stub, never a silent success
 ```
 
@@ -57,10 +70,18 @@ this is a single-user desktop app and UTC-only would make the Activity Center di
 for no benefit.
 
 **Paging.** List commands take `{ limit?: number; offset?: number; query?: string }` and return
-`{ items: T[]; total: number }`. The `total` field is what the UI's "N shown" counters need.
+`Paged<T>`, i.e. `{ items: T[]; total: number }`. The `total` field is what the UI's "N shown"
+counters need.
 
 **Idempotency.** Mutating commands carry an optional `clientId` (UUID from the UI) so a retried
 invoke does not duplicate a conversation, memory, or skill.
+
+**Call convention.** The typed client derives its parameter list from the args type (`ArgsTuple` in
+`src/contract/ipc.ts`), in three cases: `args: undefined` → **no parameter at all**, so a caller cannot
+pass a fake `{}` to an argless command; an args type whose every field is optional → **the whole object
+is optional**, so `chat.list()` and `model.list({ query: 'qwen' })` are both legal; anything else →
+required, and `model.get()` without an id is a compile error. The rule is the compiler's own
+`{} extends A` test, so the signature and the accepted calls cannot drift apart.
 
 ---
 
@@ -115,7 +136,7 @@ machine is the primary case.
 ### 3.3 `chat.*` — conversations and generation
 
 ```ts
-chat.list({ query?, limit?, offset? }):      Result<{ items: Conversation[]; total: number }>
+chat.list({ query?, limit?, offset? }):      Result<Paged<ConversationSummary>>
 chat.get(id):                                Result<Conversation>
 chat.create({ title?, agentId, modelId }):   Result<Conversation>
 chat.rename(id, title):                      Result<void>
@@ -132,6 +153,12 @@ chat.usage(conversationId):                  Result<{ contextUsed: number; conte
 
 `chat.usage` replaces the "CONTEXT USAGE (SIMULATED)" rail. The `measured: false` flag lets the UI
 keep saying "simulated" until it is genuinely a count.
+
+`ConversationSummary` is `Conversation` without `messages`, plus `messageCount`. The Chat sidebar row
+renders exactly `"{messages.length} msg · {timeAgo(updatedAt)}"` plus title and pin state
+(`src/pages/Chat.tsx:264`); pulling every message array across the boundary just to count them would
+make the list cost grow with the history, which on a 15 W machine is the difference between a snappy
+sidebar and a stall. Full `Conversation` stays the shape of `chat.get` and `chat.create`.
 
 ### 3.4 `agent.*`
 
@@ -308,9 +335,9 @@ the volume and RAM that actually exist, not the 512 GB figure in the Phase 1 moc
 | `job://state` | `{ jobId, status: ActivityKind-status, error? }` | scheduler | Activity Center |
 | `approval://pending` | `PendingApproval` | policy | Modal queue, Activity approvals filter |
 | `model://state` | `{ modelId, installed, active, loadedGB }` | registry | Model Manager, topbar chip, Dashboard |
-| `kb://document` | `{ documentId, indexed: IndexStatus }` | knowledge | Knowledge Base rows |
+| `kb://document` | `{ documentId, indexed: IndexStatus, chunks?, lastError? }` | knowledge | Knowledge Base rows |
 | `memory://changed` | `{ id, approval }` | memory | Memory Center tabs + pending badge |
-| `net://blocked` | `{ url, reason, agentId }` | policy | Internet Center, Activity |
+| `net://blocked` | `{ url, reason, agentId? }` | policy | Internet Center, Activity |
 | `telemetry://tick` | `Telemetry` | telemetry | Dashboard meters, Model Manager rail |
 
 Rule: the UI subscribes and renders; it never infers state from timing. Every badge that changes
@@ -331,6 +358,11 @@ ToolDef            + { standingGrants?: string[] }
 MemoryRecord       + { embedding?: 'stored' | 'none'; lastRetrievedAt?: string }
 ActivityEvent      + { jobId?: string; correlationId?: string }
 ```
+
+New types, added here rather than to `src/data/types.ts` because no Phase 1 screen reads them:
+`ConversationSummary` (§3.3) · `Paged<T>` · `JobRef` · `PendingApproval` · `EngineStatus` ·
+`MeasuredFit` · `RetrievedMemory` · `KbSearchResult` · `AppSettings` · `HardwareProfile` ·
+`Telemetry` (reused from `src/data/hardware.ts`). The full set is in `src/contract/ipc.ts`.
 
 ---
 
@@ -394,7 +426,8 @@ every page file, not from memory, so a screen cannot be quietly missed.
 
 ## 7. Versioning
 
-The contract carries `contractVersion: 1` in `settings.get()` and in the app handshake. A UI build
+The contract carries `contractVersion: 1` in `settings.get()` and in the app handshake; the number
+lives as `CONTRACT_VERSION` in `src/contract/ipc.ts` and is bumped only on an incompatible change. A UI build
 and a core build must agree or the app shows a known-gap state instead of misbehaving. Commands are
 never removed in a minor step — deprecated ones return `not_implemented` with a message naming the
 replacement, which keeps old builds honest rather than broken.
@@ -405,5 +438,6 @@ replacement, which keeps old builds honest rather than broken.
 
 It does not decide the Rust crate layout, the SQLite schema (see `PHASE2_DATA_MODEL.md`), or the
 sidecar's exact CLI flags (see `PHASE2_SIDECAR_SPEC.md`). It also does not mean any command exists
-yet: **nothing here is implemented**, and until M1 lands, every one of these would correctly return
-`not_implemented`.
+yet: **nothing here is implemented**. `src/contract/client.ts` is the code version of that sentence —
+until a core is attached, its transport answers all 96 commands with `not_implemented` and delivers no
+event at all, which is what this section always promised.
