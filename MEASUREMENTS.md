@@ -396,3 +396,56 @@ will demand of the UI.
   is what the admission model ultimately needs.
 - `llama-perplexity` / answer quality. This checkpoint measured speed and memory only; it says nothing
   about whether the answers are good.
+
+## 13. First measurements through `nexus-core` (M1 code, 2026-11-12)
+
+Everything above came from the scratch Node harness. This section is the first output produced by
+the Rust supervisor in `crates/nexus-core`, on the same laptop, same pinned engine
+(`D:\NEXUS-SIDECAR\b12189`) and same model (`Llama-3.2-3B-Instruct-Q4_K_M.gguf`).
+
+Harness:
+
+```
+$env:NEXUS_LIVE_ENGINE="1"; cargo test -p nexus-core live -- --nocapture
+```
+
+The test spawns `llama-server.exe` with the production argv, waits for `/health`, sends the
+production `chat_body` through the cancellable SSE client, and stops the process.
+
+**Run 1 (cold page cache after a reboot):**
+
+```
+ready in 27290 ms
+first_token_ms 3159, tokens 4, chars 8, text "NEXUS OK"
+prompt_tokens 0, completion_tokens 0, total_tokens 0   <- defect, explained below
+```
+
+**Run 2 (warm, immediately after Run 1):**
+
+```
+ready in 6811 ms
+first_token_ms 3205, elapsed_ms 4200
+tokens 4, chars 8, text "NEXUS OK"
+prompt_tokens 43, completion_tokens 5, total_tokens 48, cached_tokens 0
+private 1722 MB, working set 3530 MB
+```
+
+Launch record: pid, per-launch 64-hex token, `context: 2048`, `threads: 3` (physical cores),
+loopback port chosen by the OS.
+
+**Defect found and fixed by this run:** llama-server emits **no usage frame at all** unless the
+request carries `stream_options: {"include_usage": true}`. Before the fix every run through
+`nexus-core` reported `prompt_tokens: 0, completion_tokens: 0`, i.e. the UI would have shown a
+zero-token answer while the text streamed correctly. `inference::chat_body` now sends the option
+and `live_engine_streams_one_answer_and_stops` fails if either prompt or completion tokens come
+back as zero. This is a contract fact worth keeping: **zero usage is a request-shape bug, not an
+engine limitation.**
+
+**What this proves for M1:** the real supervisor can start the real engine, stream a real answer,
+report real token counts, measure the child's private RAM, and terminate it. Ready time varies
+27.3 s cold to 6.8 s warm, so the UI must treat the first load as a tens-of-seconds operation and
+show progress from the spawn, not from the model list.
+
+**Still open:** every item in §12 remains open, and the prompt-cache question is now sharper:
+`cached_tokens` is still 0 on the second run. The next measurement must send the *same long prompt
+twice in one process* before concluding `cache_prompt` is ineffective.

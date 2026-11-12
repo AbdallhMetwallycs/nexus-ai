@@ -1,8 +1,9 @@
 # dependencies
 node_modules/
 
-# build output (regenerate with: npm run build)
+# build output (regenerate with: npm run build / cargo build)
 dist/
+/target/
 
 # local env / secrets — never committed
 .env

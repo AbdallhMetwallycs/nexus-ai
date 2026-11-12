@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = ["crates/nexus-core"]
+
+# src-tauri joins this workspace when the shell lands (M1, task 34). Until then the
+# core is testable with no GUI dependency at all, which is what `cargo test -p nexus-core`
+# in the M1 exit gate relies on.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.99"
+publish = false
+
+[workspace.dependencies]
+# Deliberately minimal. The engine is reached over loopback HTTP with no TLS, so the
+# reqwest/hyper tree buys nothing here; `net.rs` speaks HTTP/1.1 on std::net instead.
+# The one non-serde dependency is windows-sys, for the two numbers the admission check
+# needs (free physical RAM, private bytes of the child) and the physical core count.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.dev]
+# First Tauri build on a 4-core laptop is the expensive step; keeping debug info out of
+# it is a compile-time and disk-space decision, not a taste one. `cargo test` still
+# produces usable backtraces because panics carry their own location.
+debug = 0
+incremental = true

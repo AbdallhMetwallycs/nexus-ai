@@ -1,0 +1,34 @@
+[package]
+name = "nexus-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "NEXUS AI engine supervisor, model registry, RAM admission and inference client (Phase 2, M1)"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# The two numbers the admission check is built on cannot come from portable std: free
+# physical RAM (GlobalMemoryStatusEx) and private bytes of the child process
+# (GetProcessMemoryInfo) — MEASUREMENTS.md §5 showed working set and private RAM differ by
+# ~1.8 GB under mmap, and admission charges private. Feature list is what this crate
+# actually imports, checked against windows-sys 0.60.2's own source tree:
+# GlobalMemoryStatusEx lives under SystemInformation, not Memory.
+windows-sys = { version = "0.60.2", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+# Nothing yet: the tests drive real code paths, and the engine tests are gated on
+# the pinned binary being present (see tests/engine_live.rs).
+
+[lib]
+name = "nexus_core"
+path = "src/lib.rs"

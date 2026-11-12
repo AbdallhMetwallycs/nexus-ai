@@ -228,6 +228,15 @@ between here and M1 code is the `src-tauri/` scaffold plus the first crates.io f
 and any change to a shape updates both sides in one commit); `MEASUREMENTS.md` with
 the §6 checklist from `PHASE2_SIDECAR_SPEC.md` filled in.
 
+**Progress 2026-11-12 — core library landed, gate not yet met.** `crates/nexus-core` implements the
+supervisor (`engine`), real GGUF metadata parser (`registry`), measured RAM admission (`admission`),
+prompt assembly and cancellation (`inference`), loopback HTTP/SSE (`net`) and the IPC dispatch router
+(`dispatch`). `cargo test -p nexus-core` is **52 passed, 0 failed**; `cargo clippy -p nexus-core
+--all-targets -- -D warnings` is clean. The opt-in live test streamed a real answer from the real
+engine and reported real usage (43 prompt / 5 completion tokens, 1722 MB private) — numbers in
+`MEASUREMENTS.md` §13. Tagged `m1-core`; **the `m1-first-answer` tag stays unclaimed** until the
+Tauri shell and the three manual gates below are done.
+
 **Exit gate — all of these, with output recorded:**
 ```
 cargo test -p nexus-core              → pass (unit: admission thresholds, port picker, metadata parse)
