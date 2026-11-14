@@ -90,6 +90,11 @@ impl NexusError {
         )
     }
 
+    /// The user pressed Stop (or unloaded the model) before this request produced anything.
+    pub fn cancelled() -> Self {
+        Self::new(ErrorCode::JobCancelled, "Generation was stopped.", true)
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::Internal, message, true)
     }

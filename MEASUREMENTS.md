@@ -446,6 +446,79 @@ report real token counts, measure the child's private RAM, and terminate it. Rea
 27.3 s cold to 6.8 s warm, so the UI must treat the first load as a tens-of-seconds operation and
 show progress from the spawn, not from the model list.
 
-**Still open:** every item in �12 remains open, and the prompt-cache question is now sharper:
+**Still open:** every item in �12 remains open, and the prompt-cache question is now sharper:
 `cached_tokens` is still 0 on the second run. The next measurement must send the *same long prompt
 twice in one process* before concluding `cache_prompt` is ineffective.
+
+## 14. Live UI gate through the Tauri window (M1 exit, 2026-11-14)
+
+First numbers taken by driving the **actual desktop window** — real WebView2, real composer, real
+Send/Stop buttons, real `llama-server.exe` — over the WebView2 DevTools Protocol. Driver:
+`tools/ui-gate.mjs`; raw output: `.ui-gate.json`; screenshot: `screenshots/m1-live-ui-gate.png`.
+Gate run `2026-11-14T13:28:27.327Z` → `13:29:23.314Z`, exit 0.
+
+Model and engine are the same pinned pair as section 13. Context was supplied by admission (the
+rail showed an `8k` window), threads = 3 physical cores, GPU layers 0.
+
+**First answer (cold app, engine not yet spawned):**
+
+```
+stream-started    afterClickMs 31       (label "Loading...")
+first-characters  msSinceSend 21248     (first delta "NEXUS")
+answer-complete   totalMs 22200, text "NEXUS OK"
+                  context 122 tokens (engine usage frame, rail says measured)
+```
+
+This is the fastest end-to-end number recorded for this prompt. It includes the process spawn,
+weight load and prefill; in section 13 the same short prompt cost 27.3 s cold / 6.8 s warm for the
+load alone. The 122 measured tokens are system prompt + user + completion.
+
+**Stop:**
+
+```
+charsBeforeStop   1
+charsAfterSettle  1     (re-read 2.5 s after clicking Stop)
+note              "Stopped - this answer is incomplete."
+sendBack          true
+```
+
+The answer did not grow after the click: the cancel path is a socket shutdown, not a UI flag.
+
+**Engine death mid-answer and recovery:**
+
+```
+taskkill /IM llama-server.exe /F   SUCCESS (PID 2304)
+banner appears after               1642 ms
+banner                             "engine.crashed: The local engine stopped while answering.
+                                    The next message will restart it."
+recovery send -> "RECOVERED"       22258 ms from click (includes warm restart + prefill)
+external network requests          0
+renderer console errors            0
+```
+
+**Why 1642 ms, and the defect it exposed.** A separate CDP probe killed the engine while tokens
+were streaming and polled `engine.status`:
+
+```
+kill
++14 ms     running true,  crashCount 2
++110 ms    running true,  crashCount 2
++317 ms    running true,  crashCount 2
++816 ms    running true,  crashCount 2
++1511 ms   running false, crashCount 3
+```
+
+`Child::try_wait()` on this Windows build lags an external `taskkill` by roughly 0.8-1.5 s (0.8 s in
+a second run). Measured consequence: a crash check that trusted the handle returned
+`internal: A filesystem or socket call failed`, and the following send reused the dead port
+(`internal: Connecting to the engine failed`). The supervisor now probes `/health` on the launch
+port (`serving()`); the 1642 ms above is health-probe detection time, not the handle's.
+
+**What this section proves:** the real desktop app loads the real model, streams a real answer,
+stops it, survives the engine being killed, reports the crash in contract terms, and recovers on the
+next message - all loopback-only.
+
+**Still open:** one model, one hardware profile, one run per step; no long-prompt gate yet (the
+section 13 prefill finding still governs); conversation state is still in memory, so the gate starts
+from an empty chat each launch.
+

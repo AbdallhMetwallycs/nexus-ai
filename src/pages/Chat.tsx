@@ -13,6 +13,7 @@ import {
   Send,
   Settings2,
   Sparkles,
+  Square,
   Trash2,
   UserRound,
   X,
@@ -26,6 +27,8 @@ import { MOCK_AGENTS } from '../data/agents';
 import { MOCK_MODELS, modelName } from '../data/models';
 import { usePlatform } from '../state/PlatformContext';
 import { clockTime, cn, timeAgo } from '../lib/utils';
+import { resolveTransport } from '../contract/client';
+import type { ChatTokenEvent, ChatUsageEvent, ModelRecord } from '../contract/ipc';
 
 /* ------------------------------------------------------------------ */
 /* Store: frontend-only conversation state (Phase 1).                  */
@@ -60,9 +63,25 @@ export default function Chat() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { activeModelId, online } = usePlatform();
+  const { activeModelId, setActiveModelId, online } = usePlatform();
 
-  const [conversations, setConversations] = useState<Conversation[]>(MOCK_CONVERSATIONS);
+  // A Tauri-backed build talks to the real core; the browser build keeps the approved
+  // Phase 1 demo path. The transport is resolved once (the host cannot appear mid-session).
+  const transport = useMemo(() => resolveTransport(), []);
+  const live = transport.kind === 'tauri';
+
+  const [models, setModels] = useState<ModelRecord[]>([]);
+  const [activeModel, setActiveModel] = useState<ModelRecord | null>(null);
+  const [coreError, setCoreError] = useState<string | null>(null);
+  const [usage, setUsage] = useState<{ used: number; max: number } | null>(null);
+  const [engineCap, setEngineCap] = useState<number | null>(null);
+  const [liveStatus, setLiveStatus] = useState<Record<string, 'loading' | 'streaming' | 'done' | 'stopped' | 'error'>>({});
+  const [stopping, setStopping] = useState(false);
+  const streamRef = useRef<{ conversationId: string; messageId: string } | null>(null);
+
+  const [conversations, setConversations] = useState<Conversation[]>(() =>
+    live ? [] : MOCK_CONVERSATIONS,
+  );
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [thinking, setThinking] = useState(false);
@@ -79,12 +98,105 @@ export default function Chat() {
   // Handle ?new=1 from quick actions
   useEffect(() => {
     if (searchParams.get('new') === '1') {
-      const conv = newConversation(activeModelId, 'universal');
+      const conv = newConversation(live ? activeModel?.id ?? '' : activeModelId, 'universal');
       setConversations((prev) => [conv, ...prev]);
       navigate(`/chat/${conv.id}`, { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Live core: discover what is actually on disk and pick the owner's remembered model.
+  useEffect(() => {
+    if (!live) return;
+    let cancelled = false;
+    void (async () => {
+      const listed = await transport.call('model.list', { installedOnly: true, limit: 100 });
+      if (cancelled) return;
+      if (!listed.ok) {
+        setCoreError(`${listed.error.code}: ${listed.error.message}`);
+        return;
+      }
+      setModels(listed.data.items);
+      const remembered = localStorage.getItem('nexus.activeModelId');
+      const chosen =
+        listed.data.items.find((m) => m.id === remembered) ?? listed.data.items[0] ?? null;
+      setActiveModel(chosen);
+      if (chosen) {
+        localStorage.setItem('nexus.activeModelId', chosen.id);
+        setActiveModelId(chosen.id);
+        setConversations((prev) =>
+          prev.length === 0
+            ? [newConversation(chosen.id, 'universal')]
+            : prev.map((c) => (c.modelId ? c : { ...c, modelId: chosen.id })),
+        );
+      }
+      // The advertised window is not the window we run: the core caps it by measurement.
+      const status = await transport.call('engine.status');
+      if (!cancelled && status.ok && status.data.running && status.data.contextCap) {
+        setEngineCap(status.data.contextCap);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [live, transport]);
+
+  // A packaged build landing on /chat should open the conversation it created.
+  useEffect(() => {
+    if (live && !conversationId && conversations.length > 0) {
+      navigate(`/chat/${conversations[0].id}`, { replace: true });
+    }
+  }, [live, conversationId, conversations, navigate]);
+
+  // Streaming and measured context arrive as events, never as polling.
+  useEffect(() => {
+    if (!live) return;
+    const modelId = activeModel?.id;
+    const offToken = transport.subscribe('chat://token', (event: ChatTokenEvent) => {
+      setConversations((prev) =>
+        prev.map((conversation) => {
+          if (conversation.id !== event.conversationId) return conversation;
+          const index = conversation.messages.findIndex((m) => m.id === event.messageId);
+          let messages = conversation.messages;
+          if (index === -1) {
+            messages = [
+              ...conversation.messages,
+              {
+                id: event.messageId,
+                role: 'assistant',
+                content: event.delta,
+                ts: new Date().toISOString(),
+                modelId,
+              },
+            ];
+          } else if (event.delta) {
+            messages = conversation.messages.map((m, i) =>
+              i === index ? { ...m, content: m.content + event.delta } : m,
+            );
+          }
+          return { ...conversation, messages, updatedAt: new Date().toISOString() };
+        }),
+      );
+      if (event.done) {
+        setLiveStatus((prev) => ({
+          ...prev,
+          [event.messageId]: prev[event.messageId] === 'stopped' ? 'stopped' : 'done',
+        }));
+        setThinking(false);
+        setStopping(false);
+        streamRef.current = null;
+      } else {
+        setLiveStatus((prev) => ({ ...prev, [event.messageId]: 'streaming' }));
+      }
+    });
+    const offUsage = transport.subscribe('chat://usage', (event: ChatUsageEvent) => {
+      setUsage({ used: event.contextUsed, max: event.contextMax });
+    });
+    return () => {
+      offToken();
+      offUsage();
+    };
+  }, [live, transport, activeModel?.id]);
 
   const active = useMemo(
     () => conversations.find((c) => c.id === conversationId) ?? null,
@@ -99,6 +211,22 @@ export default function Chat() {
       (c) => c.title.toLowerCase().includes(q) || c.messages.some((m) => m.content.toLowerCase().includes(q)),
     );
   }, [conversations, search]);
+
+  // What the rail may claim: measured when the engine answered, estimated otherwise.
+  const estimatedTokens = active
+    ? Math.round(active.messages.reduce((sum, m) => sum + m.content.length, 0) / 4)
+    : 0;
+  const liveModel = live ? models.find((m) => m.id === active?.modelId) ?? activeModel : null;
+  const displayModel = live
+    ? liveModel?.name ?? 'No model loaded'
+    : active
+      ? modelName(active.modelId)
+      : '—';
+  const contextUsed = live && usage ? usage.used : estimatedTokens;
+  const contextMax = live
+    ? usage?.max ?? engineCap ?? liveModel?.contextWindow ?? 32_768
+    : MOCK_MODELS.find((m) => m.id === active?.modelId)?.contextWindow ?? 32_768;
+  const streamingId = streamRef.current?.messageId;
 
   const update = (fn: (prev: Conversation[]) => Conversation[]) => setConversations(fn);
 
@@ -148,10 +276,106 @@ export default function Chat() {
     }, 900 + (userText.length % 5) * 180);
   };
 
+  /** The real path: load through admission, then stream tokens from the local engine. */
+  const sendLive = async (text: string, conversation: Conversation) => {
+    if (!activeModel) {
+      toast('No installed model was found. Put a GGUF file in the models folder.', 'error');
+      return;
+    }
+    const userMessage: ChatMessage = {
+      id: nextId(),
+      role: 'user',
+      content: text || `(attached ${attachments.map((a) => a.name).join(', ')})`,
+      ts: new Date().toISOString(),
+      attachments: attachments.length ? attachments : undefined,
+    };
+    const messageId = `a-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const emptyReply: ChatMessage = {
+      id: messageId,
+      role: 'assistant',
+      content: '',
+      ts: new Date().toISOString(),
+      modelId: activeModel.id,
+    };
+    update((prev) =>
+      prev.map((c) =>
+        c.id !== conversation.id
+          ? c
+          : {
+              ...c,
+              title: c.messages.length === 0 ? text.slice(0, 42) || c.title : c.title,
+              messages: [...c.messages, userMessage, emptyReply],
+              updatedAt: userMessage.ts,
+            },
+      ),
+    );
+    setThinking(true);
+    setStopping(false);
+    setUsage(null);
+    setCoreError(null);
+    setLiveStatus((prev) => ({ ...prev, [messageId]: 'loading' }));
+    streamRef.current = { conversationId: conversation.id, messageId };
+
+    const fail = (code: string, message: string) => {
+      setCoreError(`${code}: ${message}`);
+      setLiveStatus((prev) => ({ ...prev, [messageId]: 'error' }));
+      update((prev) =>
+        prev.map((c) =>
+          c.id !== conversation.id
+            ? c
+            : {
+                ...c,
+                messages: c.messages.map((m) =>
+                  m.id === messageId ? { ...m, content: `> ${message}` } : m,
+                ),
+              },
+        ),
+      );
+    };
+
+    const loaded = await transport.call('engine.loadModel', { modelId: activeModel.id });
+    if (!loaded.ok) {
+      setThinking(false);
+      streamRef.current = null;
+      fail(loaded.error.code, loaded.error.message);
+      return;
+    }
+    setEngineCap(loaded.data.contextCapped);
+    const sent = await transport.call('chat.send', {
+      conversationId: conversation.id,
+      content: text,
+      clientId: messageId,
+    });
+    if (!sent.ok) {
+      setThinking(false);
+      setStopping(false);
+      streamRef.current = null;
+      if (sent.error.code === 'job.cancelled') {
+        setLiveStatus((prev) => ({ ...prev, [messageId]: 'stopped' }));
+      } else {
+        fail(sent.error.code, sent.error.message);
+      }
+    }
+  };
+
+  const stop = async () => {
+    const streaming = streamRef.current;
+    if (!streaming) return;
+    setStopping(true);
+    setLiveStatus((prev) => ({ ...prev, [streaming.messageId]: 'stopped' }));
+    await transport.call('chat.stop', { conversationId: streaming.conversationId });
+  };
+
   const send = () => {
     const text = draft.trim();
     if (!text && attachments.length === 0) return;
     if (!active) return;
+    if (live) {
+      setDraft('');
+      setAttachments([]);
+      void sendLive(text, active);
+      return;
+    }
     const msg: ChatMessage = {
       id: nextId(),
       role: 'user',
@@ -167,6 +391,10 @@ export default function Chat() {
 
   const regenerate = () => {
     if (!active) return;
+    if (live) {
+      toast('Regenerate is not implemented in this build (chat.regenerate lands with M2).', 'info');
+      return;
+    }
     const lastUser = [...active.messages].reverse().find((m) => m.role === 'user');
     if (!lastUser) return;
     mutateActive((c) => {
@@ -211,7 +439,7 @@ export default function Chat() {
   };
 
   const createConversation = () => {
-    const conv = newConversation(activeModelId, 'universal');
+    const conv = newConversation(live ? activeModel?.id ?? '' : activeModelId, 'universal');
     setConversations((prev) => [conv, ...prev]);
     navigate(`/chat/${conv.id}`);
   };
@@ -308,7 +536,11 @@ export default function Chat() {
             <EmptyState
               icon={<Sparkles />}
               title="Select or start a conversation"
-              description="NEXUS AI Chat is a UI prototype. Replies are canned simulations — no model is running."
+              description={
+                live
+                  ? 'Answers are generated locally by the engine on this machine. Nothing leaves it.'
+                  : 'NEXUS AI Chat is a UI prototype. Replies are canned simulations — no model is running.'
+              }
               action={
                 <Button variant="primary" icon={<MessageSquarePlus size={14} />} onClick={createConversation}>
                   New conversation
@@ -323,7 +555,7 @@ export default function Chat() {
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-ink-primary">{active.title}</p>
                 <p className="truncate text-2xs text-ink-faint">
-                  {MOCK_AGENTS.find((a) => a.id === active.agentId)?.name ?? active.agentId} · {modelName(active.modelId)}
+                  {MOCK_AGENTS.find((a) => a.id === active.agentId)?.name ?? active.agentId} · {displayModel}
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
@@ -331,8 +563,21 @@ export default function Chat() {
                   aria-label="Model for this conversation"
                   className="h-8 w-[190px] text-xs"
                   value={active.modelId}
-                  onChange={(e) => mutateActive((c) => ({ ...c, modelId: e.target.value }))}
-                  options={MOCK_MODELS.map((m) => ({ value: m.id, label: m.name }))}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    mutateActive((c) => ({ ...c, modelId: id }));
+                    if (!live) return;
+                    const chosen = models.find((m) => m.id === id) ?? null;
+                    setActiveModel(chosen);
+                    if (!chosen) return;
+                    localStorage.setItem('nexus.activeModelId', chosen.id);
+                    setActiveModelId(chosen.id);
+                    toast(`Loading ${chosen.name}… first load can take 30 s`, 'info');
+                    void transport.call('engine.loadModel', { modelId: chosen.id }).then((result) => {
+                      if (!result.ok) setCoreError(`${result.error.code}: ${result.error.message}`);
+                    });
+                  }}
+                  options={(live ? models : MOCK_MODELS).map((m) => ({ value: m.id, label: m.name }))}
                 />
                 <Select
                   aria-label="Agent for this conversation"
@@ -358,11 +603,28 @@ export default function Chat() {
             <div className="relative flex-1">
               <div ref={scrollRef} onScroll={onScroll} className="absolute inset-0 overflow-y-auto">
                 <div className="mx-auto max-w-3xl space-y-4 px-4 py-4">
-                  <DemoNotice className="mb-2" text="Assistant replies below are canned simulations, not model output." />
+                  {!live && (
+                    <DemoNotice className="mb-2" text="Assistant replies below are canned simulations, not model output." />
+                  )}
+                  {live && coreError && (
+                    <div className="rounded-card border border-state-err/30 bg-state-err/10 px-4 py-3 text-xs text-state-err">
+                      {coreError}
+                    </div>
+                  )}
+                  {live && !activeModel && (
+                    <div className="rounded-card border border-state-warn/30 bg-state-warn/10 px-4 py-3 text-xs text-ink-secondary">
+                      No installed model was found in the models folder. Copy a GGUF file there, then
+                      reopen this screen.
+                    </div>
+                  )}
                   {active.messages.length === 0 && !thinking && (
                     <EmptyState
                       title="No messages yet"
-                      description="Ask anything to see the simulated reply flow. Attachments and generation are UI demos only."
+                      description={
+                        live
+                          ? 'The answer is generated on this machine by the local engine. The first model load can take up to 30 seconds.'
+                          : 'Ask anything to see the simulated reply flow. Attachments and generation are UI demos only.'
+                      }
                       className="py-16"
                     />
                   )}
@@ -370,6 +632,7 @@ export default function Chat() {
                     <MessageBubble
                       key={m.id}
                       message={m}
+                      status={liveStatus[m.id]}
                       copied={copiedId === m.id}
                       onCopy={() => copyMessage(m)}
                       onRegenerate={m.role === 'assistant' && m === active.messages[active.messages.length - 1] ? regenerate : undefined}
@@ -379,15 +642,15 @@ export default function Chat() {
                     <div className="flex items-center gap-2.5 rounded-card border border-surface-line bg-surface-raised px-4 py-3">
                       <Bot size={15} className="text-accent" />
                       <span className="flex items-center gap-1 text-xs text-ink-muted">
-                        Generating simulated reply
+                        {live ? 'Generating on this machine' : 'Generating simulated reply'}
                         <span className="inline-flex gap-0.5">
                           {[0, 1, 2].map((i) => (
                             <span key={i} className="h-1 w-1 animate-pulse-dot rounded-full bg-accent" style={{ animationDelay: `${i * 220}ms` }} />
                           ))}
                         </span>
                       </span>
-                      <Badge tone="idle" className="ml-auto">
-                        no real inference
+                      <Badge tone={live ? 'ok' : 'idle'} className="ml-auto">
+                        {live ? 'local engine' : 'no real inference'}
                       </Badge>
                     </div>
                   )}
@@ -443,12 +706,34 @@ export default function Chat() {
                     aria-label="Message input"
                     className="field max-h-32 min-h-[38px] flex-1 resize-none py-2.5 text-sm"
                   />
-                  <Button variant="primary" icon={<Send size={14} />} disabled={thinking || (!draft.trim() && attachments.length === 0)} onClick={send}>
-                    Send
-                  </Button>
+                  {live && thinking && streamingId !== undefined ? (
+                    <Button
+                      variant="danger"
+                      icon={<Square size={12} />}
+                      disabled={stopping || liveStatus[streamingId] === 'loading'}
+                      onClick={() => void stop()}
+                    >
+                      {stopping
+                        ? 'Stopping…'
+                        : liveStatus[streamingId] === 'loading'
+                          ? 'Loading…'
+                          : 'Stop'}
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="primary"
+                      icon={<Send size={14} />}
+                      disabled={thinking || (live && !activeModel) || (!draft.trim() && attachments.length === 0)}
+                      onClick={send}
+                    >
+                      Send
+                    </Button>
+                  )}
                 </div>
                 <p className="mt-1.5 text-center text-2xs text-ink-faint">
-                  {online ? 'Online (simulated)' : 'Offline mode'} · replies are simulated · nothing leaves this machine
+                  {live
+                    ? `Local engine${liveModel ? ` · ${liveModel.name}` : ''} · offline · nothing leaves this machine`
+                    : `${online ? 'Online (simulated)' : 'Offline mode'} · replies are simulated · nothing leaves this machine`}
                 </p>
               </div>
             </div>
@@ -460,29 +745,34 @@ export default function Chat() {
       <aside className="hidden w-[260px] shrink-0 overflow-y-auto border-l border-surface-line bg-surface-raised/40 2xl:block">
         {active && (
           <>
-            <ContextPanelCard title="Context usage (simulated)">
+            <ContextPanelCard title={live && usage ? 'Context usage (measured)' : live ? 'Context usage (estimated)' : 'Context usage (simulated)'}>
               <div className="space-y-2">
                 <div className="flex items-baseline justify-between">
-                  <span className="mono-num text-xl font-bold text-ink-primary">
-                    {(active.messages.reduce((s, m) => s + m.content.length, 0) / 4).toFixed(0)}
-                  </span>
+                  <span className="mono-num text-xl font-bold text-ink-primary">{contextUsed}</span>
                   <span className="text-2xs text-ink-faint">
-                    ≈ tokens / {modelName(active.modelId).split(' ')[0]} window
+                    {live && usage ? 'tokens' : '≈ tokens'} / {Math.round(contextMax / 1024)}k{' '}
+                    {live && !usage && !engineCap ? 'model max' : 'window'}
                   </span>
                 </div>
                 <div className="h-1.5 overflow-hidden rounded-full bg-surface-line/70">
                   <div
                     className="h-full rounded-full bg-accent transition-all"
-                    style={{ width: `${Math.min(100, (active.messages.reduce((s, m) => s + m.content.length, 0) / 4 / (MOCK_MODELS.find((m) => m.id === active.modelId)?.contextWindow ?? 32768)) * 100)}%` }}
+                    style={{ width: `${Math.min(100, (contextUsed / contextMax) * 100)}%` }}
                   />
                 </div>
-                <p className="text-2xs text-ink-faint">Estimated from message length only — no tokenizer runs in Phase 1.</p>
+                <p className="text-2xs text-ink-faint">
+                  {live
+                    ? usage
+                      ? 'Counted by the engine in its usage frame after each answer.'
+                      : 'Estimated from message length — the engine reports exact tokens when an answer completes.'
+                    : 'Estimated from message length only — no tokenizer runs in Phase 1.'}
+                </p>
               </div>
             </ContextPanelCard>
             <ContextPanelCard title="Conversation">
               <div className="space-y-0.5">
                 <KeyValue k="Agent" v={MOCK_AGENTS.find((a) => a.id === active.agentId)?.name ?? '—'} />
-                <KeyValue k="Model" v={modelName(active.modelId)} />
+                <KeyValue k="Model" v={displayModel} />
                 <KeyValue k="Messages" v={String(active.messages.length)} mono />
                 <KeyValue k="Updated" v={timeAgo(new Date(active.updatedAt))} />
               </div>
@@ -576,11 +866,13 @@ export default function Chat() {
 
 function MessageBubble({
   message,
+  status,
   copied,
   onCopy,
   onRegenerate,
 }: {
   message: ChatMessage;
+  status?: 'loading' | 'streaming' | 'done' | 'stopped' | 'error';
   copied: boolean;
   onCopy: () => void;
   onRegenerate?: () => void;
@@ -622,9 +914,25 @@ function MessageBubble({
           {isUser ? (
             <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink-primary">{message.content}</p>
           ) : (
-            <Markdown source={message.content} />
+            <>
+              {status === 'loading' && !message.content ? (
+                <span className="text-xs text-ink-faint">Waiting for the engine…</span>
+              ) : (
+                <Markdown source={message.content} />
+              )}
+              {status === 'streaming' && (
+                <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-accent align-middle" />
+              )}
+            </>
           )}
         </div>
+
+        {status === 'stopped' && (
+          <p className="mt-1 text-2xs text-state-warn">Stopped — this answer is incomplete.</p>
+        )}
+        {status === 'error' && (
+          <p className="mt-1 text-2xs text-state-err">Generation failed — see the message above.</p>
+        )}
 
         <div className="mt-1.5 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           <Tooltip content={copied ? 'Copied' : 'Copy message'} side="bottom" delay={100}>
@@ -633,7 +941,7 @@ function MessageBubble({
             </IconButton>
           </Tooltip>
           {onRegenerate && (
-            <Tooltip content="Regenerate (new canned reply — no model call)" side="bottom" delay={100}>
+            <Tooltip content="Regenerate response" side="bottom" delay={100}>
               <IconButton label="Regenerate response" onClick={onRegenerate}>
                 <RefreshCw size={13} />
               </IconButton>

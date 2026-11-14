@@ -1,0 +1,19 @@
+[package]
+name = "nexus-ai"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "NEXUS AI desktop shell: Tauri 2 host for the nexus-core IPC contract"
+
+[lib]
+name = "nexus_ai_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+nexus-core = { path = "../crates/nexus-core" }
+serde_json = { workspace = true }
+tauri = { version = "2", features = [] }

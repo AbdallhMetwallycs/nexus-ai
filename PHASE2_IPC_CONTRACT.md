@@ -19,11 +19,15 @@ here and a type in `src/contract/` disagree, that is a contract bug: fix both in
 **Naming.** `domain.verb` — `model.list`, `chat.send`, `memory.approve`. One verb per behaviour;
 no overloaded `set`.
 
-**Transport.** Tauri `invoke(cmd, args)` for request/response; Tauri `emit`/`listen` for streams
-and progress. The UI never polls for state changes that the core can announce. `src/contract/client.ts`
-reaches the host through a **structural probe** of `window.__TAURI__` (invoke + listen, no package
-import) so the contract compiles in a plain browser build; if either half is missing the app is treated
-as having no core and gets the `not_implemented` transport rather than half-working.
+**Transport.** Tauri `invoke('ipc', { command, args })` for request/response; Tauri `emit`/`listen`
+for streams and progress. The single `ipc` command exists because Tauri command names are Rust
+identifiers and therefore cannot carry the dotted contract name (`chat.send`); the dotted name travels
+unchanged inside the payload and `nexus_core::dispatch` matches it. The UI never polls for state changes
+that the core can announce. `src/contract/client.ts` reaches the host through a **structural probe** of
+`window.__TAURI__` (invoke + listen, no package import) so the contract compiles in a plain browser
+build; if either half is missing the app is treated as having no core and gets the `not_implemented`
+transport rather than half-working. `tauri.conf.json` sets `withGlobalTauri: true`, which is what
+makes that probe resolve.
 
 **Envelope.** Every fallible command returns the same shape:
 

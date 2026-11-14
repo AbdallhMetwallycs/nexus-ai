@@ -115,16 +115,25 @@ impl Core {
         Ok(plan.context)
     }
 
+    /// Data-or-error form, for hosts such as Tauri that carry the envelope themselves
+    /// (a Tauri command resolves with the data and rejects with the error).
+    pub fn execute(
+        &mut self,
+        command: &str,
+        args: &Value,
+        sink: &mut dyn EventSink,
+    ) -> CoreResult<Value> {
+        self.route(command, args, sink)
+    }
+
+    /// Envelope form, used by the unit tests and any host that transports `Response<T>`.
     pub fn dispatch(
         &mut self,
         command: &str,
         args: &Value,
         sink: &mut dyn EventSink,
     ) -> Response<Value> {
-        match self.route(command, args, sink) {
-            Ok(value) => Response::from_core(Ok(value)),
-            Err(err) => Response::from_core(Err(err)),
-        }
+        Response::from_core(self.execute(command, args, sink))
     }
 
     fn route(
@@ -269,7 +278,13 @@ impl Core {
                         false,
                     )
                 })?;
+                // A Stop pressed while a cold load is still running must survive into the
+                // request: reset here, then refuse before generation if it flipped.
+                self.cancel.reset();
                 let context = self.load_model(&model_id, sink)?;
+                if self.cancel.is_cancelled() {
+                    return Err(NexusError::cancelled());
+                }
                 let message_id = args
                     .get("clientId")
                     .and_then(Value::as_str)
@@ -285,7 +300,7 @@ impl Core {
                 let body = inference::chat_body(&messages, 512, 0.7);
                 let loopback = self.supervisor.loopback()?;
                 let cancel = self.cancel.clone();
-                let outcome = inference::generate(&loopback, &body, &cancel, |delta| {
+                let outcome = match inference::generate(&loopback, &body, &cancel, |delta| {
                     sink.emit(
                         "chat://token",
                         json!({
@@ -296,7 +311,27 @@ impl Core {
                         }),
                     );
                     true
-                })?;
+                }) {
+                    Ok(outcome) => outcome,
+                    Err(err) => {
+                        // A socket failure whose engine no longer answers is a crash, not a
+                        // generic I/O error: say what happened and that the next message will
+                        // restart it. `try_wait` lags an external kill by up to ~1.5 s on this
+                        // machine, so a health probe — not the handle — decides.
+                        let alive = self.supervisor.refresh() && self.supervisor.serving();
+                        if !alive {
+                            self.supervisor.mark_crashed();
+                            let mut crashed = NexusError::new(
+                                crate::error::ErrorCode::EngineCrashed,
+                                "The local engine stopped while answering. The next message will restart it.",
+                                true,
+                            );
+                            crashed = crashed.with_detail(err.to_string());
+                            return Err(crashed);
+                        }
+                        return Err(err);
+                    }
+                };
                 sink.emit(
                     "chat://token",
                     json!({
@@ -454,6 +489,70 @@ mod tests {
         assert_eq!(value["error"]["code"], "model.not_installed");
         assert!(sink.events.is_empty());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The exact path the Chat screen takes in the Tauri build: list from disk, load
+    /// through admission, stream `chat.send`, and receive token/usage events.
+    /// ```text
+    /// $env:NEXUS_LIVE_ENGINE="1"; cargo test -p nexus-core live_chat -- --nocapture
+    /// ```
+    #[test]
+    fn live_chat_send_streams_tokens_and_measured_usage() {
+        if std::env::var("NEXUS_LIVE_ENGINE").as_deref() != Ok("1") {
+            eprintln!("skipped: set NEXUS_LIVE_ENGINE=1 to load the real model");
+            return;
+        }
+        let models = std::env::var("NEXUS_MODELS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("D:\\NEXUS-MODELS"));
+        let engine = std::env::var("NEXUS_ENGINE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("D:\\NEXUS-SIDECAR\\b12189"));
+        let mut core = Core::new(&models, &engine);
+        let mut sink = RecordingSink::default();
+
+        let listed = core.execute("model.list", &json!({}), &mut sink).unwrap();
+        let id = listed["items"][0]["id"].as_str().expect("one installed model").to_owned();
+        let loaded = core
+            .execute("engine.loadModel", &json!({ "modelId": id }), &mut sink)
+            .expect("engine becomes ready");
+        println!("loaded {id}: {loaded}");
+
+        let sent = core.execute(
+            "chat.send",
+            &json!({
+                "conversationId": "live-ui",
+                "content": "Reply with exactly: NEXUS OK",
+                "clientId": "assistant-1"
+            }),
+            &mut sink,
+        );
+        // Stop the child before asserting so a failed assertion cannot leave 1.7 GB running.
+        let memory = core.supervisor.process_memory();
+        core.supervisor.stop();
+
+        let sent = sent.expect("chat.send succeeds");
+        assert_eq!(sent["messageId"], "assistant-1");
+        let tokens: Vec<&Value> = sink
+            .events
+            .iter()
+            .filter(|(channel, _)| channel == "chat://token")
+            .map(|(_, payload)| payload)
+            .collect();
+        assert!(tokens.len() > 1, "expected deltas plus a done frame");
+        assert_eq!(tokens.last().unwrap()["done"], true);
+        assert_eq!(tokens.last().unwrap()["conversationId"], "live-ui");
+        let text: String = tokens.iter().map(|t| t["delta"].as_str().unwrap_or("")).collect();
+        println!("streamed {text:?} in {} frames, private {:?}", tokens.len(), memory);
+
+        let usage = sink
+            .events
+            .iter()
+            .find(|(channel, _)| channel == "chat://usage")
+            .map(|(_, payload)| payload)
+            .expect("a measured usage frame");
+        assert!(usage["contextUsed"].as_u64().unwrap() > 0, "{usage}");
+        assert!(usage["contextMax"].as_u64().unwrap() >= usage["contextUsed"].as_u64().unwrap());
     }
 
     fn write_synthetic_gguf(path: &std::path::Path) {

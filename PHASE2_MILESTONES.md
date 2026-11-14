@@ -237,6 +237,26 @@ engine and reported real usage (43 prompt / 5 completion tokens, 1722 MB private
 `MEASUREMENTS.md` §13. Tagged `m1-core`; **the `m1-first-answer` tag stays unclaimed** until the
 Tauri shell and the three manual gates below are done.
 
+**Progress 2026-11-14 — M1 exit gate met.** The Tauri shell exists (`src-tauri/`), exposes the single
+`ipc` command, bridges `chat://token`, `chat://usage` and `model://state`, and terminates the child on
+exit. `tools/ui-gate.mjs` drives the real window and the real engine, and the recorded run
+(`TEST_RESULTS.md` §4, `MEASUREMENTS.md` §14) shows:
+
+- `NEXUS OK` streamed into the real Chat screen (122 engine-counted context tokens);
+- Stop halted generation at 1 character with **no growth 2.5 s later** and the incomplete-answer note;
+- `taskkill /IM llama-server.exe /F` mid-answer produced
+  `engine.crashed: The local engine stopped while answering. The next message will restart it.`,
+  the app survived, and the next send streamed `RECOVERED`;
+- zero external network requests, zero renderer console errors.
+
+Regression at the same commit: `cargo test -p nexus-core` 53 passed, clippy clean, typecheck and
+`npm run build` exit 0. Two real defects were found by the gate and fixed: the Vite watcher crashed
+on `nexus_ai_lib.dll` (`EBUSY`), and crash detection trusted `Child::try_wait`, which lags an external
+kill by 0.8–1.5 s and therefore misreported a dead engine as `internal:`. The supervisor now probes
+`/health` (`serving()`) before reuse and before deciding "crash vs I/O error". Tag `m1-first-answer`
+is placed on the commit carrying this evidence.
+
+
 **Exit gate — all of these, with output recorded:**
 ```
 cargo test -p nexus-core              → pass (unit: admission thresholds, port picker, metadata parse)

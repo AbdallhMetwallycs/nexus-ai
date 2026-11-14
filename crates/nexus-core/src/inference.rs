@@ -100,13 +100,15 @@ pub fn chat_body(
 /// A `CancelFlag` interrupts the socket even during prefill, which is the difference
 /// between a Stop button and a Stop suggestion. The monitor thread exits within 50 ms of
 /// the generation ending, so a burst of sends cannot accumulate threads.
+///
+/// The caller resets the flag before the request starts; `generate` deliberately does not,
+/// so a Stop pressed during a cold model load is still honoured here.
 pub fn generate(
     loopback: &Loopback,
     body: &Value,
     cancel: &CancelFlag,
     mut on_delta: impl FnMut(&str) -> bool,
 ) -> CoreResult<StreamOutcome> {
-    cancel.reset();
     let handle = CancelHandle::new();
     let stopped = Arc::new(AtomicBool::new(false));
 

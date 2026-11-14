@@ -4,13 +4,12 @@ import { useTheme } from '../../theme/ThemeContext';
 import { useActiveModel, usePlatform } from '../../state/PlatformContext';
 import { Badge, StatusDot, Tooltip } from '../ui';
 import { NAV_ITEMS } from './Sidebar';
-import { modelName } from '../../data/models';
 
 export function Topbar() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { theme, toggleTheme } = useTheme();
-  const { online, setOnline } = usePlatform();
+  const { online, setOnline, live } = usePlatform();
   const activeModel = useActiveModel();
 
   const current =
@@ -20,13 +19,13 @@ export function Topbar() {
     <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-surface-line bg-surface-raised/80 px-4 backdrop-blur">
       <div className="flex min-w-0 items-center gap-2">
         <h1 className="truncate text-sm font-semibold text-ink-primary">{current.label}</h1>
-        <Badge tone="violet" className="hidden xl:inline-flex">
-          UI prototype · Phase 1
+        <Badge tone={live ? 'ok' : 'violet'} className="hidden xl:inline-flex">
+          {live ? 'Local engine' : 'UI prototype · Phase 1'}
         </Badge>
       </div>
 
       <div className="flex items-center gap-2">
-        <Tooltip content={`Active model (simulated): ${modelName(activeModel.id)} — click to open Model Manager`} side="bottom">
+        <Tooltip content={`Active model (${live ? 'local registry' : 'simulated'}): ${activeModel.name} — click to open Model Manager`} side="bottom">
           <button
             onClick={() => navigate('/models')}
             className="flex h-7 items-center gap-1.5 rounded-full border border-surface-line bg-surface-base px-2.5 text-2xs font-medium text-ink-secondary hover:border-accent/40 hover:text-ink-primary"

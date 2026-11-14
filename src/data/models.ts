@@ -183,5 +183,7 @@ export function modelById(id: string): ModelRecord | undefined {
 }
 
 export function modelName(id: string): string {
-  return modelById(id)?.name ?? 'Unknown model (mock)';
+  // A real registry id (filename slug) will not exist in the Phase 1 catalog. Showing the
+  // id is honest; inventing "unknown model" would hide which file actually answered.
+  return modelById(id)?.name ?? (id || 'No model');
 }

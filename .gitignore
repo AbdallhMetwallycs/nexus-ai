@@ -22,8 +22,10 @@ Desktop.ini
 *.log
 npm-debug.log*
 
-# Phase 2 (reserved — nothing exists yet)
-# src-tauri/target/
-# src-tauri/gen/
+# Phase 2 desktop shell
+src-tauri/target/
+src-tauri/gen/
+.ui-gate.json
+
 # models/          # GGUF weights stay out of the repo by design
 # nexus.db*

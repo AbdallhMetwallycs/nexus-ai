@@ -91,9 +91,36 @@ impl Supervisor {
         self.launch.as_ref()
     }
 
+    /// True only if the engine answers `/health` right now.
+    ///
+    /// This is deliberately a network probe, not a process-handle check. Measured on this
+    /// machine, `Child::try_wait` can keep reporting a `taskkill`-ed child as alive for
+    /// 0.8–1.5 s, which is long enough for an immediate retry to trust a dead port and for
+    /// a socket failure to be misreported as a generic I/O error. The listener closing is
+    /// the authoritative signal the engine gives us.
+    pub fn serving(&self) -> bool {
+        let Some(launch) = self.launch.as_ref() else { return false };
+        let probe = Loopback::new(launch.port, "");
+        matches!(probe.get_unauthenticated("/health"), Ok(response) if response.status == 200 && response.text().contains("\"ok\""))
+    }
+
+    /// Record a crash that a failed request already proved, so it is counted exactly once.
+    ///
+    /// `refresh()` may not have observed the exit yet (`try_wait` lags), and a hung engine
+    /// still holds ~1.7 GB, so terminate whatever is left and clear the launch. Calling this
+    /// after `refresh()` already cleared the child is a no-op and does not double-count.
+    pub fn mark_crashed(&mut self) {
+        if self.child.is_none() && self.launch.is_none() {
+            return;
+        }
+        self.stop();
+        self.crash_count = self.crash_count.saturating_add(1);
+        self.last_crash_at = Some(now_iso8601());
+    }
+
     /// True only if the child is still alive. A process that exited since the last status
     /// call is recorded as a crash exactly once, which is what the UI's "engine crashed"
-    /// state reads.
+    /// state reads. Prefer `serving()` for reuse decisions: a handle can outlive the port.
     pub fn refresh(&mut self) -> bool {
         let Some(child) = self.child.as_mut() else { return false };
         match child.try_wait() {
@@ -157,12 +184,13 @@ impl Supervisor {
             .with_detail(model_path.display().to_string()));
         }
         // Repetition of a model that is already resident is not a restart: it costs the
-        // owner 6–38 s and changes nothing.
+        // owner 6–38 s and changes nothing. Both checks are required: the handle can lag an
+        // external kill, and the port can be gone while the handle still claims otherwise.
         let already = self
             .launch
             .as_ref()
             .is_some_and(|l| l.model_path == model_path && l.context == context);
-        if already && self.refresh() {
+        if already && self.refresh() && self.serving() {
             let ready_ms = self.launch.as_ref().map(|l| l.ready_ms).unwrap_or(0);
             let threads = self.launch.as_ref().map(|l| l.threads).unwrap_or(threads);
             return Ok(ModelLoadResult {

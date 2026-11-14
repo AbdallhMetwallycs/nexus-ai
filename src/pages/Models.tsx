@@ -37,6 +37,7 @@ import { MOCK_MODELS } from '../data/models';
 import type { ModelRecord } from '../data/types';
 import { usePlatform } from '../state/PlatformContext';
 import { cn, formatBytes } from '../lib/utils';
+import { resolveTransport } from '../contract/client';
 
 /* ------------------------------------------------------------------ */
 /* Page-local helpers                                                  */
@@ -89,9 +90,10 @@ const fmtDate = (isoDate: string) => isoDate;
 
 export default function Models() {
   const { toast } = useToast();
-  const { activeModelId, setActiveModelId } = usePlatform();
+  const { activeModelId, setActiveModelId, live, coreModels } = usePlatform();
+  const transport = useMemo(() => resolveTransport(), []);
 
-  const [tab, setTab] = useState<'installed' | 'catalog'>('catalog');
+  const [tab, setTab] = useState<'installed' | 'catalog'>(live ? 'installed' : 'catalog');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<SortKey>('name');
   const [compareIds, setCompareIds] = useState<string[]>([]);
@@ -99,7 +101,8 @@ export default function Models() {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [compareOpen, setCompareOpen] = useState(false);
 
-  const installed = MOCK_MODELS.filter((m) => m.installed);
+  // The packaged build reads this list from the core; the browser build keeps the mock.
+  const installed: ModelRecord[] = live ? coreModels : MOCK_MODELS.filter((m) => m.installed);
 
   const q = search.trim().toLowerCase();
   const catalogRows = useMemo(() => {
@@ -125,13 +128,26 @@ export default function Models() {
     });
   };
 
-  const setActive = (m: ModelRecord) => {
+  const setActive = async (m: ModelRecord) => {
     setActiveModelId(m.id);
-    toast(`"${m.name}" set as active model (simulated — no weights loaded)`, 'info');
+    localStorage.setItem('nexus.activeModelId', m.id);
+    if (!live) {
+      toast(`"${m.name}" set as active model (simulated — no weights loaded)`, 'info');
+      return;
+    }
+    toast(`Loading ${m.name}… first load can take 30 s`, 'info');
+    const loaded = await transport.call('engine.loadModel', { modelId: m.id });
+    if (loaded.ok) {
+      toast(`${m.name} loaded — ${loaded.data.contextCapped} token context, ${loaded.data.threads} threads`, 'success');
+    } else {
+      toast(`${loaded.error.code}: ${loaded.error.message}`, 'error');
+    }
   };
 
   const compareModels = MOCK_MODELS.filter((m) => compareIds.includes(m.id));
-  const detailModel = detailId ? MOCK_MODELS.find((m) => m.id === detailId) ?? null : null;
+  const detailModel = detailId
+    ? [...installed, ...MOCK_MODELS].find((m) => m.id === detailId) ?? null
+    : null;
   const downloadModel = downloadId ? MOCK_MODELS.find((m) => m.id === downloadId) ?? null : null;
 
   const telemetry = useMemo(() => mockTelemetry(0), []);
@@ -195,9 +211,17 @@ export default function Models() {
     >
       <PageHeader
         title="Model Manager"
-        description="Browse the mock catalog, judge fit for this machine, and pick the active model. Nothing here loads, downloads, or runs weights."
+        description={
+          live
+            ? 'Installed models are read from disk and loaded through the measured RAM admission check. The catalog below is still Phase 1 mock data.'
+            : 'Browse the mock catalog, judge fit for this machine, and pick the active model. Nothing here loads, downloads, or runs weights.'
+        }
         notice={
-          <DemoNotice text="Prototype only — no models are actually installed, and the catalog metadata is mock data." />
+          live ? (
+            <DemoNotice text="Installed rows are real GGUF files. Catalog entries and downloads remain mock data until M2/M3." />
+          ) : (
+            <DemoNotice text="Prototype only — no models are actually installed, and the catalog metadata is mock data." />
+          )
         }
       >
         <div className="flex flex-wrap items-center gap-3 pb-1">
@@ -243,20 +267,81 @@ export default function Models() {
 
       <div className="space-y-4 p-5">
         {tab === 'installed' ? (
-          <Card>
-            <CardBody>
-              <EmptyState
-                icon={<Database />}
-                title="No models are actually installed"
-                description="Phase 1 of this prototype ships with zero model weights on disk. The list below would show installed runtimes once the backend exists; for now even records marked installed in the data are false. Browse the mock catalog to see what could be added."
-                action={
-                  <Button variant="primary" icon={<ArrowRight size={14} />} onClick={() => setTab('catalog')}>
-                    Browse the mock catalog
-                  </Button>
-                }
-              />
-            </CardBody>
-          </Card>
+          live ? (
+            installed.length === 0 ? (
+              <Card>
+                <CardBody>
+                  <EmptyState
+                    icon={<Database />}
+                    title="No GGUF files found"
+                    description="The core scanned the models folder and found nothing it could parse. Copy a .gguf file into the folder, then reopen this screen."
+                  />
+                </CardBody>
+              </Card>
+            ) : (
+              <Card>
+                <CardHeader
+                  title="Installed on disk"
+                  subtitle="Read by the core from the models folder. Loading runs the measured admission check first."
+                />
+                <ul className="divide-y divide-surface-line">
+                  {installed.map((m) => {
+                    const isActive = m.id === activeModelId;
+                    return (
+                      <li
+                        key={m.id}
+                        className={cn(
+                          'flex flex-wrap items-center gap-3 px-4 py-3 transition-colors hover:bg-surface-line/25',
+                          isActive && 'bg-accent/[0.07]',
+                        )}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="truncate text-xs font-semibold text-ink-primary">{m.name}</p>
+                            {isActive && (
+                              <Badge tone="accent" dot>
+                                active
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="mono-num mt-0.5 truncate text-2xs text-ink-faint">
+                            {m.family} · {m.quantization} · {m.contextWindow.toLocaleString()} ctx ·{' '}
+                            {formatBytes(m.sizeGB)} · est. {m.ramGB} GB RAM
+                          </p>
+                        </div>
+                        <Button
+                          size="xs"
+                          variant={isActive ? 'ghost' : 'secondary'}
+                          disabled={isActive}
+                          onClick={() => void setActive(m)}
+                        >
+                          {isActive ? 'Active' : 'Load'}
+                        </Button>
+                        <Button size="xs" variant="ghost" icon={<Eye size={12} />} onClick={() => setDetailId(m.id)}>
+                          Details
+                        </Button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </Card>
+            )
+          ) : (
+            <Card>
+              <CardBody>
+                <EmptyState
+                  icon={<Database />}
+                  title="No models are actually installed"
+                  description="Phase 1 of this prototype ships with zero model weights on disk. The list below would show installed runtimes once the backend exists; for now even records marked installed in the data are false. Browse the mock catalog to see what could be added."
+                  action={
+                    <Button variant="primary" icon={<ArrowRight size={14} />} onClick={() => setTab('catalog')}>
+                      Browse the mock catalog
+                    </Button>
+                  }
+                />
+              </CardBody>
+            </Card>
+          )
         ) : (
           <Card>
             <CardHeader

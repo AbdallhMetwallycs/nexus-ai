@@ -7,6 +7,8 @@
  *  1. No new dependency. The host bridge is detected structurally on `globalThis`
  *     (a Tauri-style `window.__TAURI__`), so the contract stays usable from a plain
  *     browser build and from the future Tauri shell without either importing a package.
+ *     Tauri command names must be Rust identifiers, so the host registers one `ipc`
+ *     command carrying `{ command, args }`; the dotted contract name stays the payload.
  *  2. No fake success. When no core is attached — which is every build up to M1 —
  *     `resolveTransport()` returns a transport whose every command rejects to
  *     `not_implemented` and whose subscriptions never fire. Screens must therefore
@@ -169,7 +171,7 @@ export function createTauriTransport(bridge: ResolvedBridge): NexusTransport {
     kind: 'tauri',
     async call<C extends CommandName>(command: C, ...args: ArgsTuple<C>): Promise<Result<ResOf<C>>> {
       try {
-        const data = (await bridge.invoke(command, args[0])) as ResOf<C>;
+        const data = (await bridge.invoke('ipc', { command, args: args[0] ?? null })) as ResOf<C>;
         return { ok: true, data };
       } catch (thrown) {
         return { ok: false, error: normalizeRejection(command, thrown) };
