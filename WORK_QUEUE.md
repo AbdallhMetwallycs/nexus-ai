@@ -32,9 +32,9 @@ Agents: **A** = this session (opencode, worktree `D:\NEXUS-AI-m1`, branch `m1-fi
 | 4 | Record gate output | `TEST_RESULTS.md`, `MEASUREMENTS.md` §14 | A | done | exact JSON/text quoted with ISO timestamps |
 | 5 | Rebuild frontend | none (writes `dist/`) | A | done | `npm run build` exit 0, 1614 modules, built in 11.18 s |
 | 6 | Re-run full regression | none | A | done | `cargo test -p nexus-core` 53 passed 0 failed; clippy exit 0; typecheck exit 0 — all recorded |
-| 7 | Commit M1 shell + UI honesty fixes on `m1-first-answer` | `src-tauri/`, `src/pages/Chat.tsx`, `src/components/layout/Topbar.tsx`, `vite.config.ts`, `package.json`, `.gitignore`, `AGENTS.md`, `WORK_QUEUE.md`, `HANDOFF.md`, new P1 docs | A | in-progress | one commit whose message lists verified evidence |
-| 8 | Tag `m1-first-answer` | none (creates tag) | A | todo | tag exists on that commit, only after 1–7 |
-| 9 | Reconcile `m1-first-answer` with master | merge only | A | todo | user's uncommitted master work present and `npm run typecheck` passes |
+| 7 | Commit M1 shell + UI honesty fixes on `m1-first-answer` | `src-tauri/`, `src/pages/Chat.tsx`, `src/components/layout/Topbar.tsx`, `vite.config.ts`, `package.json`, `.gitignore`, `AGENTS.md`, `WORK_QUEUE.md`, `HANDOFF.md`, new P1 docs | A | done | commit `ba15fa2` (95 files, message lists the verified gate/regression output) |
+| 8 | Tag `m1-first-answer` | none (creates tag) | A | done | `m1-first-answer` annotated tag points at `ba15fa2`; task 1–7 were done first |
+| 9 | Reconcile `m1-first-answer` with master | merge only | A | done | fast-forward `e570692..ba15fa2` in `D:\NEXUS-AI`; user's `tools.ts`, `types.ts`, `Tools.tsx`, `capabilities.ts` still uncommitted and preserved; `npm run typecheck` exit 0 |
 
 ## P1 — Required documentation (independent files; none touch code)
 
@@ -52,7 +52,7 @@ Agents: **A** = this session (opencode, worktree `D:\NEXUS-AI-m1`, branch `m1-fi
 | 19 | Roadmap M1 line | `PROJECT_ROADMAP.md` | B | todo | M1 marked done with evidence link after task 8 |
 | 20 | Security model | `SECURITY_MODEL.md` | A (drafted) → B review | review | content reviewed and committed |
 | 21 | Data and backup strategy | `DATA_AND_BACKUP_STRATEGY.md` | A (drafted) → B review | review | content reviewed and committed |
-| 22 | Update `PHASE2_MILESTONES.md` M1 section | `PHASE2_MILESTONES.md` | A | todo | M1 marked done with the gate evidence |
+| 22 | Update `PHASE2_MILESTONES.md` M1 section | `PHASE2_MILESTONES.md` | A | done | 2026-11-14 progress paragraph with gate evidence and the tag; regression numbers quoted |
 | 23 | Update `README.md` | `README.md` | B | todo | points at Phase 2 doc set and `AGENTS.md` |
 
 ## P2 — M1 hygiene (small, isolated; claim after P0)
@@ -81,7 +81,11 @@ Agents: **A** = this session (opencode, worktree `D:\NEXUS-AI-m1`, branch `m1-fi
 
 | Agent | Branch | Rows held |
 | --- | --- | --- |
-| A | `m1-first-answer` @ worktree | 1, 2, 3, 4, 5, 6, 7, 8, 22 (+ 18, 20, 21 drafts until reviewed) |
-| B | — | 10, 11, 13, 14, 15, 16, 17, 19, 23 (12 only after A releases it) |
+| A | `m1-first-answer` @ worktree | 18, 20, 21 (drafts awaiting content review); P0 rows 1–9 and 22 are `done` |
+| B | — | 10, 11, 13, 14, 15, 16, 17, 19, 23 (12 is released now that A finished task 4) |
+
+P0 is closed: master fast-forwarded to the evidence commit, tag `m1-first-answer` placed, and the
+migration left the owner's uncommitted UI work untouched. Next queued work is P1 docs (B) and the
+P2 hygiene rows 24–29.
 
 Last updated: 2026-11-14.

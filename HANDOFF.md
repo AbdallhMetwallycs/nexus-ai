@@ -5,6 +5,29 @@ what changed last. Do not edit older blocks.
 
 ---
 
+## 2026-11-14 (later) — Agent A — P0 closed
+
+**Current state.** M1 is done and tagged. `ba15fa2` carries the Tauri shell, the crash-detection
+fix, the honesty fixes, the gate driver, and the evidence documents; tag `m1-first-answer` points at
+it. `D:\NEXUS-AI` master was fast-forwarded `e570692..ba15fa2` and the owner's uncommitted UI work
+(`src/data/tools.ts`, `src/data/types.ts`, `src/pages/Tools.tsx`, `src/data/capabilities.ts`) is
+still uncommitted and untouched; `npm run typecheck` in the master worktree is exit 0.
+
+**Gate evidence (2026-11-14T13:28:27Z–13:29:23Z, exit 0).** `answer-complete` `NEXUS OK` / 122
+measured tokens / 22.2 s cold; `stop` 1 char and still 1 after 2.5 s; kill → `engine.crashed: The
+local engine stopped while answering. The next message will restart it.` (1.64 s); next send →
+`RECOVERED` (22.3 s); 0 external requests; 0 console errors. Full quotes in `TEST_RESULTS.md` §4 and
+`MEASUREMENTS.md` §14.
+
+**Defect worth remembering.** `Child::try_wait()` lags an external `taskkill` by 0.8–1.5 s here.
+The supervisor now probes `/health` (`serving()`) before reusing a launch and before deciding
+crash-vs-I/O. Do not "simplify" that back to a handle check.
+
+**Next action.** P1 docs (rows 10–17, 19, 23) and the M2 store skeleton (rows 24–35).
+Conversation state is still in memory; `chat.regenerate` still refuses in live mode.
+
+---
+
 ## 2026-11-14 — Agent A (worktree `D:\NEXUS-AI-m1`, branch `m1-first-answer`)
 
 **Current state.** M1 real-answer path works end to end through the desktop app: `llama-server.exe`
