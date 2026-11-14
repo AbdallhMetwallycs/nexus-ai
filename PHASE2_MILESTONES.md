@@ -264,7 +264,7 @@ cargo clippy -p nexus-core -- -D warnings → clean
 npm run typecheck && npm run build    → exit 0
 manual: start app offline → load a real model → send a prompt → tokens stream incrementally
 manual: press stop → generation halts within the measured cancel latency
-manual: kill llama.exe mid-generation → answer marked incomplete, app survives, next request restarts engine
+manual: kill llama-server.exe mid-generation → answer marked incomplete, app survives, next request restarts engine
 ```
 **Honesty swap:** Chat loses its `DemoNotice` and the "(Simulated response…)" italic; the context
 rail switches to `measured: true`. Model Manager's Installed tab can show real rows.

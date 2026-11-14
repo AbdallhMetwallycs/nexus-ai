@@ -152,3 +152,51 @@ after a usage frame (`context: "122"` above).
 - The gate kills the engine with `taskkill`, not by crashing the renderer or the host.
 - No installer, signing, or updater exists yet (`RELEASE_NOTES.md` says so).
 - Only one model, one hardware profile, one run per step.
+
+## 7. Font egress closed — vendored Inter / JetBrains Mono (2026-11-14)
+
+The docs review found `index.html` still linked `fonts.googleapis.com` / `fonts.gstatic.com`, while
+`SECURITY_MODEL.md` claimed no egress. The gate's `externalRequestCount: 0` could not settle it,
+because WebView2 may have answered from its font cache. Rather than leave an unprovable claim, the
+links were removed and both families are bundled.
+
+```
+> npm run build
+vite v5.4.21 building for production...
+...
+dist/assets/inter-latin-wght-normal-Dx4kXJAl.woff2                48.26 kB
+dist/assets/jetbrains-mono-latin-wght-normal-B9CIFXIH.woff2      40.40 kB
+dist/assets/index-DatQnz7P.css                                   39.87 kB
+dist/assets/index-DLzCpqWL.js                                   436.02 kB
+✓ built in 13.31s
+BUILD_EXIT=0
+```
+
+Built HTML contains no external URL:
+
+```
+> Select-String -Path dist\index.html -Pattern "https?://" -AllMatches
+(no output)
+```
+
+Runtime check in the real window after `Page.reload({ignoreCache:true})`:
+
+```
+{
+  "bodyFont": "\"Inter Variable\", Inter, \"Segoe UI\", system-ui, sans-serif",
+  "monoFont": null,
+  "interLoaded": true,
+  "monoLoaded": true,
+  "resources": [
+    "http://ipc.localhost/ipc"
+  ],
+  "stylesheetHrefs": []
+}
+```
+
+`resources` lists only Tauri's own loopback IPC bridge; no `fonts.*`, no CDN, no stylesheet link.
+Font files on disk: 12 WOFF2, 302,728 bytes total. `monoFont: null` because the dashboard route
+tested has no monospace element — `monoLoaded: true` is the direct check.
+
+Recorded as D-037; closes KI-10 and TD-3.
+

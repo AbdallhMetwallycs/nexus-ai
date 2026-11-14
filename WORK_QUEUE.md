@@ -40,31 +40,32 @@ Agents: **A** = this session (opencode, worktree `D:\NEXUS-AI-m1`, branch `m1-fi
 
 | ID | Task | Files (exclusive) | Owner | Status | Done-when (evidence) |
 | --- | --- | --- | --- | --- | --- |
-| 10 | Recovery report | `PROJECT_RECOVERY_REPORT.md` | B | todo | file committed, statements traceable to commits/tags |
-| 11 | Per-screen implementation status | `IMPLEMENTATION_STATUS.md` | B | todo | every screen marked real/partial/demo with backing IPC command |
-| 12 | Test results log | `TEST_RESULTS.md` | A (1–6) → B after | todo | commands, dates, exact output, pass/fail |
-| 13 | Changelog | `CHANGELOG.md` | B | todo | M1 entries: core, shell, streaming, stop, crash, honesty fixes |
-| 14 | Release notes | `RELEASE_NOTES.md` | B | todo | user-facing M1 notes, explicitly "not yet installable" |
-| 15 | Architecture decisions index | `ARCHITECTURE_DECISIONS.md` | B | todo | ADR index for D-019…D-036 + single-`ipc` + Stop-before-lock |
-| 16 | Known issues | `KNOWN_ISSUES.md` | B | todo | includes CSP, signing, context estimate window, in-memory chat, crash message |
-| 17 | Technical debt | `TECHNICAL_DEBT.md` | B | todo | numbered TD-1… with owner/trigger |
-| 18 | Master plan review | `MASTER_PROJECT_PLAN.md` | A (drafted) → B review | review | content reviewed and committed |
-| 19 | Roadmap M1 line | `PROJECT_ROADMAP.md` | B | todo | M1 marked done with evidence link after task 8 |
-| 20 | Security model | `SECURITY_MODEL.md` | A (drafted) → B review | review | content reviewed and committed |
-| 21 | Data and backup strategy | `DATA_AND_BACKUP_STRATEGY.md` | A (drafted) → B review | review | content reviewed and committed |
-| 22 | Update `PHASE2_MILESTONES.md` M1 section | `PHASE2_MILESTONES.md` | A | done | 2026-11-14 progress paragraph with gate evidence and the tag; regression numbers quoted |
-| 23 | Update `README.md` | `README.md` | B | todo | points at Phase 2 doc set and `AGENTS.md` |
+| 10 | Recovery report | `PROJECT_RECOVERY_REPORT.md` | B | done | 9 sections; commit/tag table checked with `git log`/`git show`; every number quoted from `TEST_RESULTS.md` or `MEASUREMENTS.md` |
+| 11 | Per-screen implementation status | `IMPLEMENTATION_STATUS.md` | B | done | 11 screens + implemented command surface; each row verified against `dispatch.rs` and `src/pages/*.tsx` |
+| 12 | Test results log | `TEST_RESULTS.md` | A (1–6) → B after | done | §1–§4 gate, §5 defects, §6 gaps, §7 font fix; exact commands and output quoted |
+| 13 | Changelog | `CHANGELOG.md` | B | done | `[0.1.0] — 2026-11-14 — M1`; core, shell, streaming, stop, crash, honesty fixes, font fix |
+| 14 | Release notes | `RELEASE_NOTES.md` | B | done | user-facing M1 notes; "not installable" callout and run-from-source steps |
+| 15 | Architecture decisions index | `ARCHITECTURE_DECISIONS.md` | B | done | D-019…D-036 one-liners with status + ADR-001 (single `ipc`) and ADR-002 (Stop before mutex) |
+| 16 | Known issues | `KNOWN_ISSUES.md` | B | done | KI-1…KI-12 with impact/workaround; KI-10 resolved by the font fix |
+| 17 | Technical debt | `TECHNICAL_DEBT.md` | B | done | TD-1…TD-16, each with what/why/trigger; TD-3 resolved |
+| 18 | Master plan review | `MASTER_PROJECT_PLAN.md` | A | done | status line and delivery table corrected to M1 done/tagged; reviewed after B flagged both as stale |
+| 19 | Roadmap M1 line | `PROJECT_ROADMAP.md` | B | done | M1 marked DONE with tag `m1-first-answer` and `TEST_RESULTS.md` §4 / `MEASUREMENTS.md` §14 |
+| 20 | Security model | `SECURITY_MODEL.md` | A | done | egress row rewritten to name the vendored fonts; date 2026-11-14 |
+| 21 | Data and backup strategy | `DATA_AND_BACKUP_STRATEGY.md` | A | done | content re-read against the store plan; date 2026-11-14 |
+| 22 | Update `PHASE2_MILESTONES.md` M1 section | `PHASE2_MILESTONES.md` | A | done | 2026-11-14 progress paragraph with gate evidence and the tag; regression numbers quoted; `llama.exe` → `llama-server.exe` in the exit-gate block |
+| 23 | Update `README.md` | `README.md` | B | done | current milestone, run commands, honest per-screen table, Phase 2 doc set and `AGENTS.md` |
 
 ## P2 — M1 hygiene (small, isolated; claim after P0)
 
 | ID | Task | Files (exclusive) | Owner | Status | Done-when (evidence) |
 | --- | --- | --- | --- | --- | --- |
-| 24 | Centralize model-load context cap | `crates/nexus-core/src/admission.rs` | Either | todo | one constant used by dispatch and covered by a test |
+| 24 | Use the admission constants instead of literal context bounds | `crates/nexus-core/src/engine.rs` | Either | todo | `engine.rs` `context.clamp(2_048, 32_768)` uses `admission::MIN_CONTEXT`/`MAX_CONTEXT`; dispatch already passes `admission::DEFAULT_CONTEXT` (the old wording here was stale). UI fallback `32_768` in `Chat.tsx` is TD-14, not this row |
 | 25 | Unit test for crash mapping (fake dead supervisor) | `crates/nexus-core/src/dispatch.rs` | Either | todo | `cargo test` count increases and passes |
 | 26 | Test `chat.send` cancelled-while-loading | `crates/nexus-core/src/dispatch.rs` (after 25) | Either | todo | returns `job.cancelled` |
 | 27 | Live tests skip cleanly when `NEXUS_LIVE_ENGINE` unset | `crates/nexus-core/src/dispatch.rs`, `inference.rs` | Either | todo | plain `cargo test` passes fast, no engine spawn |
-| 28 | Document `NEXUS_CDP_PORT` / WebView2 debugging (dev-only) | `AGENTS.md` (after 3) | Either | todo | usage note present, no secret committed |
+| 28 | Document `NEXUS_CDP_PORT` / WebView2 debugging (dev-only) | `AGENTS.md` (after 3) | Either | done | `AGENTS.md` → "Live UI gate" block (port 9333, second terminal, gate driver) plus `tools/README.md` env overrides `NEXUS_CDP_PORT`, `NEXUS_SHOT`, `NEXUS_GATE_OUT`; no secret committed |
 | 29 | Models page honesty audit | `src/pages/Models.tsx` | Either | todo | every mock action has a `DemoNotice` or refuses honestly |
+| 36 | Move UI fonts into the bundle (no font CDN) | `index.html`, `src/main.tsx`, `tailwind.config.js`, `package.json`, `package-lock.json` | A | done | `@fontsource-variable/inter` + `jetbrains-mono`; `dist/index.html` has no `http(s)://`; runtime check `interLoaded:true`, `monoLoaded:true`, only `http://ipc.localhost/ipc` — `TEST_RESULTS.md` §7, D-037 |
 
 ## P3 — M2 preparation (new files, no overlap with M1)
 
@@ -81,11 +82,12 @@ Agents: **A** = this session (opencode, worktree `D:\NEXUS-AI-m1`, branch `m1-fi
 
 | Agent | Branch | Rows held |
 | --- | --- | --- |
-| A | `m1-first-answer` @ worktree | 18, 20, 21 (drafts awaiting content review); P0 rows 1–9 and 22 are `done` |
-| B | — | 10, 11, 13, 14, 15, 16, 17, 19, 23 (12 is released now that A finished task 4) |
+| A | `m1-first-answer` @ worktree | none open — 1–9, 12, 18, 20–22, 36 are `done` |
+| B | — | none open — 10, 11, 13–17, 19, 23 are `done`; 12 released to A and closed |
 
-P0 is closed: master fast-forwarded to the evidence commit, tag `m1-first-answer` placed, and the
-migration left the owner's uncommitted UI work untouched. Next queued work is P1 docs (B) and the
-P2 hygiene rows 24–29.
+P0 and P1 are closed. The docs lane ran against the real tree, and its review found three stale
+documents (master plan status, security-model egress claim, row 24) plus the Google Fonts writeup in
+`index.html`; all were fixed in the same change and the font fix is recorded as D-037. Next queued
+work is P2 hygiene (24–29) and then the M2 store skeleton (30–35).
 
 Last updated: 2026-11-14.

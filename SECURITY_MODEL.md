@@ -1,6 +1,6 @@
 # SECURITY_MODEL.md — NEXUS AI
 
-**Status:** current for Phase 2 M1 (2026-11-12). Updated when a trust boundary, permission, or
+**Status:** current for Phase 2 M1 (2026-11-14). Updated when a trust boundary, permission, or
 storage location changes.
 **Companion docs:** `PHASE2_POLICY_MODEL.md` (what the product is allowed to do on the owner's
 behalf), `DATA_AND_BACKUP_STRATEGY.md` (what is stored and how it is protected), `DECISION_LOG.md`
@@ -46,7 +46,7 @@ against *accidental* leakage, not against local malware.
 | --- | --- |
 | Loopback-only engine bind | `engine.rs` argv: `--host 127.0.0.1`; port chosen by binding `127.0.0.1:0` |
 | Per-launch bearer token on all routes except `/health` | `--api-key`; `launcher_token()` is 32 random bytes as hex and tested to differ per launch (`tokens_are_32_bytes_of_hex_and_differ_per_launch`) |
-| No network egress from the app | No HTTP client dependency in the workspace except the hand-written loopback client in `net.rs`; verified at runtime by a CDP network capture during the M1 UI gate (recorded in `MEASUREMENTS.md` §14) |
+| No network egress from the app | No HTTP client dependency in the workspace except the hand-written loopback client in `net.rs`; the only external stylesheet (Google Fonts) was removed on 2026-11-14 and Inter/JetBrains Mono are bundled from `@fontsource-variable/*`, so no URL in `dist/index.html` leaves the machine. Runtime capture: `externalRequestCount: 0` in `TEST_RESULTS.md` §4 |
 | No shell / filesystem / http plugin in the shell | `src-tauri/Cargo.toml`, `capabilities/default.json` |
 | Engine dies with the app | `RunEvent::Exit` cancels work, then `supervisor.stop()` terminates the child (`src-tauri/src/lib.rs`) |
 | Fail-closed admission | If free/RAM status cannot be read, the load is refused rather than guessed (`admission.rs`) |

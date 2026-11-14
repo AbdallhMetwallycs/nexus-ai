@@ -1,6 +1,6 @@
 # PROJECT_ROADMAP.md — NEXUS AI
 
-**Updated:** 2026-11-12
+**Updated:** 2026-11-14
 **Relationship to other docs:** `PHASE2_MILESTONES.md` defines *what "done" means* for each
 milestone. This file defines *order, dependencies, and what comes next*. Execution status is in
 `IMPLEMENTATION_STATUS.md`.
@@ -15,7 +15,7 @@ Phase 2
   M1.0   Rust + MSVC toolchain .................. DONE (tag m1-0-toolchain)
   M1.1   llama.cpp engine acquired .............. DONE (tag m1-1-engine)
   M1.2   One model, measured .................... DONE (tag m1-2-measurements)
-  M1     One real answer end to end ............. CORE DONE (tag m1-core); shell + UI gate running
+  M1     One real answer end to end ............. DONE (tag m1-first-answer; TEST_RESULTS.md §4, MEASUREMENTS.md §14)
   M2     Persistence ............................ NEXT
   M3     Knowledge and Memory ................... PLANNED
   M4     Tools and one working agent ............ PLANNED
@@ -23,16 +23,19 @@ Phase 2
   M6     Packaging and hardening ................ PLANNED
 ```
 
-## M1 — close the gate (current)
+## M1 — closed 2026-11-14
 
-Remaining work, in order:
+Gate evidence: `TEST_RESULTS.md` §4 and `MEASUREMENTS.md` §14; tag `m1-first-answer` points at
+`ba15fa2`. The three exit items are done:
 
-1. **UI gate evidence.** Drive the real Tauri window: model loads, tokens stream incrementally,
-   Stop halts generation, killing `llama-server.exe` mid-answer marks the answer failed, the app
-   survives and the next request restarts the engine. Record output in `TEST_RESULTS.md`.
-2. **Tag `m1-first-answer`** only when all three manual gates have recorded output.
-3. **Reconcile with `master`** without losing the owner's uncommitted UI work
-   (`src/data/tools.ts`, `src/data/types.ts`, `src/pages/Tools.tsx`, `src/data/capabilities.ts`).
+1. **UI gate evidence.** `node tools/ui-gate.mjs` drove the real Tauri window: `NEXUS OK`
+   streamed (122 measured tokens, 22.2 s cold), Stop held at 1 character after 2.5 s,
+   `taskkill /IM llama-server.exe /F` produced the `engine.crashed` banner in 1,642 ms, the
+   next send streamed `RECOVERED`, 0 external requests, 0 console errors.
+2. **Tag `m1-first-answer`.** Placed on `ba15fa2` after the gate and regression were recorded.
+3. **Reconcile with `master`.** Fast-forward `e570692..ba15fa2`; the owner's uncommitted UI work
+   (`src/data/tools.ts`, `src/data/types.ts`, `src/pages/Tools.tsx`, `src/data/capabilities.ts`)
+   is still uncommitted and untouched; `npm run typecheck` exit 0 in the master worktree.
 
 **Unblocks:** M2 (persistence) — the IPC contract already has the shapes M2 fills in.
 

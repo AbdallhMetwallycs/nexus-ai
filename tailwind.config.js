@@ -37,8 +37,8 @@ export default {
         },
       },
       fontFamily: {
-        sans: ['Inter', 'Segoe UI', 'system-ui', 'sans-serif'],
-        mono: ['"JetBrains Mono"', 'Cascadia Code', 'Consolas', 'monospace'],
+        sans: ['Inter Variable', 'Inter', 'Segoe UI', 'system-ui', 'sans-serif'],
+        mono: ['"JetBrains Mono Variable"', '"JetBrains Mono"', 'Cascadia Code', 'Consolas', 'monospace'],
       },
       fontSize: {
         '2xs': ['0.6875rem', '1rem'],

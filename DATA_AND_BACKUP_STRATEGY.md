@@ -1,6 +1,6 @@
 # DATA_AND_BACKUP_STRATEGY.md — NEXUS AI
 
-**Status:** current for Phase 2 M1 (2026-11-12). The database sections describe the committed M2
+**Status:** current for Phase 2 M1 (2026-11-14). The database sections describe the committed M2
 design; nothing below claims a store exists today.
 
 ## 1. What data exists right now

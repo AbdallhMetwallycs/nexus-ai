@@ -1,8 +1,9 @@
 # MASTER_PROJECT_PLAN.md — NEXUS AI
 
-**Version:** 1.0 · **Updated:** 2026-11-12 · **Owner:** project owner (single-user product)
-**Status of record:** Phase 1 complete and approved; Phase 2 M0–M1.2 done; M1 core + shell landed and
-being verified end to end; M2 next.
+**Version:** 1.1 · **Updated:** 2026-11-14 · **Owner:** project owner (single-user product)
+**Status of record:** Phase 1 complete and approved; Phase 2 M0–M1 done and tagged
+`m1-first-answer` (`ba15fa2`, 2026-11-14) with the UI gate recorded in `TEST_RESULTS.md` §4;
+M2 next.
 
 ## 1. Product definition
 
@@ -70,7 +71,7 @@ Details: `ARCHITECTURE.md`, `PHASE2_ARCHITECTURE_PLAN.md`, `PHASE2_IPC_CONTRACT.
 | Phase 1 | Complete UI prototype, all screens, approved design | **Done** — approved 2026-11-07 (`APPROVE UI - START PHASE 2`) |
 | Phase 2 · M0–M0.5 | Architecture lock, IPC contract as TypeScript types | Done |
 | Phase 2 · M1.x | Toolchain, engine acquisition, one model, measurements | Done |
-| Phase 2 · M1 | Real answer end to end: core, shell, streaming, stop, crash recovery | **Core + shell done, UI gate in progress** |
+| Phase 2 · M1 | Real answer end to end: core, shell, streaming, stop, crash recovery | **Done** — tagged `m1-first-answer`; gate in `TEST_RESULTS.md` §4 |
 | Phase 2 · M2 | SQLite persistence, backup/restore | Next |
 | Phase 2 · M3 | Knowledge base, retrieval, memory | Planned |
 | Phase 2 · M4 | Tools, approvals, one working agent | Planned |

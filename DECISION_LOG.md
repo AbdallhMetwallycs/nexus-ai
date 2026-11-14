@@ -287,6 +287,16 @@ stopped when the fetch rejected. *Why:* the premise survives, but not for the re
 gave. They treated tokens/sec as the risk; on this hardware the risk is the dead air before the first
 token, which makes prompt-cache reuse a Phase 2 design requirement rather than an optimisation.
 
+**D-037 — UI fonts are vendored, because a font CDN is still a network call.** `index.html` shipped
+a Phase 1 `<link>` to `fonts.googleapis.com` / `fonts.gstatic.com`. The M1 gate recorded zero external
+requests, but that is not proof: WebView2 may have served the CSS from its cache, and the cold-cache
+behaviour was never measured. Rather than argue from an unmeasured assumption, Inter and JetBrains
+Mono now come from `@fontsource-variable/*` (12 WOFF2 files, 302,728 bytes in `dist/assets/`) and the
+built HTML contains no `http(s)://` URL. Tailwind prefers the variable families with the old names as
+fallback, so the approved look is unchanged. *Why:* "local only" is a product boundary, and a request
+the app cannot prove it never makes is not local. The npm fetch is development-time work, like the
+earlier dependency fetches, and is recorded here per `AGENTS.md` rule 4.
+
 ## Deferred (explicitly not in Phase 1)
 
 LLM runtime (Ollama/llama.cpp), backend/API, databases, persistent memory,

@@ -5,6 +5,28 @@ what changed last. Do not edit older blocks.
 
 ---
 
+## 2026-11-14 (docs) — Agent A — P1 documentation landed
+
+**Current state.** The documentation set is complete and reviewed: `PROJECT_RECOVERY_REPORT.md`,
+`IMPLEMENTATION_STATUS.md`, `CHANGELOG.md`, `RELEASE_NOTES.md`, `ARCHITECTURE_DECISIONS.md`,
+`KNOWN_ISSUES.md`, `TECHNICAL_DEBT.md`, updated `PROJECT_ROADMAP.md`, `README.md`,
+`MASTER_PROJECT_PLAN.md`, `SECURITY_MODEL.md`, `DATA_AND_BACKUP_STRATEGY.md`. The docs lane verified
+claims against `git log`, `dispatch.rs`, `src/pages/*.tsx` and the recorded gate output instead of
+copying the drafts.
+
+**Review findings, all fixed.** `MASTER_PROJECT_PLAN.md` still said "M1 core + shell landed and being
+verified"; the security model claimed no egress while `index.html` linked Google Fonts; `WORK_QUEUE.md`
+row 24 described a duplication that no longer exists. The font contradiction was real and is closed
+by vendoring Inter/JetBrains Mono (`@fontsource-variable/*`, D-037): `dist/index.html` now contains no
+`http(s)://`, and the live window reports `interLoaded:true`, `monoLoaded:true`, with only
+`http://ipc.localhost/ipc` as a resource (`TEST_RESULTS.md` §7).
+
+**Next action.** P2 hygiene: row 24 (`engine.rs` clamp should use `admission::MIN_CONTEXT` /
+`MAX_CONTEXT`), 25–27 (crash-mapping and cancelled-while-loading tests), 29 (Models page audit). Then
+the M2 store skeleton, rows 30–35.
+
+---
+
 ## 2026-11-14 (later) — Agent A — P0 closed
 
 **Current state.** M1 is done and tagged. `ba15fa2` carries the Tauri shell, the crash-detection
