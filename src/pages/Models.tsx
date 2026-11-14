@@ -129,19 +129,24 @@ export default function Models() {
   };
 
   const setActive = async (m: ModelRecord) => {
-    setActiveModelId(m.id);
-    localStorage.setItem('nexus.activeModelId', m.id);
     if (!live) {
+      setActiveModelId(m.id);
+      localStorage.setItem('nexus.activeModelId', m.id);
       toast(`"${m.name}" set as active model (simulated — no weights loaded)`, 'info');
       return;
     }
+    // Live: the badge and the remembered id follow a successful load, never precede it.
+    // Admission can refuse for RAM and `engine.loadModel` can fail; marking a model "active"
+    // before the core answers is a claim the next screen would repeat as fact.
     toast(`Loading ${m.name}… first load can take 30 s`, 'info');
     const loaded = await transport.call('engine.loadModel', { modelId: m.id });
     if (loaded.ok) {
+      setActiveModelId(m.id);
+      localStorage.setItem('nexus.activeModelId', m.id);
       toast(`${m.name} loaded — ${loaded.data.contextCapped} token context, ${loaded.data.threads} threads`, 'success');
-    } else {
-      toast(`${loaded.error.code}: ${loaded.error.message}`, 'error');
+      return;
     }
+    toast(`${loaded.error.code}: ${loaded.error.message}`, 'error');
   };
 
   const compareModels = MOCK_MODELS.filter((m) => compareIds.includes(m.id));
@@ -152,6 +157,9 @@ export default function Models() {
 
   const telemetry = useMemo(() => mockTelemetry(0), []);
   const ramHeadroomGB = telemetry.ramTotalGB - telemetry.ramUsedGB;
+
+  /** In live mode only records the core actually found on disk can be loaded. */
+  const isOnDisk = (id: string) => installed.some((m) => m.id === id);
 
   const rowMenu = (m: ModelRecord): MenuItem[] => [
     { id: 'details', label: 'Details', icon: <Eye />, onSelect: () => setDetailId(m.id) },
@@ -164,7 +172,15 @@ export default function Models() {
     },
     m.id === activeModelId
       ? { id: 'active', label: 'Active model', icon: <Check />, disabled: true, onSelect: () => undefined }
-      : { id: 'set-active', label: 'Set active', icon: <Star />, onSelect: () => setActive(m) },
+      : live && !isOnDisk(m.id)
+        ? {
+            id: 'not-installed',
+            label: 'Not on disk — mock catalog row',
+            icon: <Star />,
+            disabled: true,
+            onSelect: () => undefined,
+          }
+        : { id: 'set-active', label: 'Set active', icon: <Star />, onSelect: () => setActive(m) },
   ];
 
   return (
@@ -503,7 +519,7 @@ export default function Models() {
               icon={<Download size={13} />}
               onClick={() => {
                 setDownloadId(null);
-                toast('Download is not available in Phase 1', 'warning');
+                toast('Downloads are not implemented yet (M2/M3)', 'warning');
               }}
             >
               Start download
@@ -542,7 +558,7 @@ export default function Models() {
               <Button variant="ghost" onClick={() => setDetailId(null)}>
                 Close
               </Button>
-              {detailModel.id !== activeModelId && (
+              {detailModel.id !== activeModelId && (!live || isOnDisk(detailModel.id)) && (
                 <Button
                   variant="primary"
                   icon={<Star size={13} />}
@@ -573,7 +589,10 @@ export default function Models() {
               <KeyValue k="GPU recommended" v={detailModel.gpuRecommended ? 'yes' : 'no'} />
               <KeyValue k="Version" v={detailModel.version} mono />
               <KeyValue k="Updated" v={detailModel.updatedAt} mono />
-              <KeyValue k="Installed" v={detailModel.installed ? 'yes' : 'no — Phase 1 has no weights'} />
+              <KeyValue
+                k="Installed"
+                v={detailModel.installed ? 'yes' : live ? 'no — not on disk (mock catalog entry)' : 'no — no weights in this prototype'}
+              />
             </div>
             <div>
               <p className="label">Description</p>

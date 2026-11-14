@@ -4,6 +4,18 @@ All notable changes to NEXUS AI. This project is pre-1.0 and source-run only; th
 installer, signing or updater yet. Entries describe what ran on this machine, with the
 evidence document named.
 
+## [Unreleased]
+
+### Fixed
+
+- **Model Manager could show a model as active when it had not loaded.** In live mode `Set active`
+  wrote the active id (and `localStorage`) *before* calling `engine.loadModel`, so a refused
+  admission or a failed load still painted the `active` badge and remembered the choice. The badge
+  and the remembered id now follow a successful load. Mock catalog rows in live mode no longer offer
+  `Set active`; the menu says `Not on disk — mock catalog row`, and the details modal hides the
+  button for those rows. The download toast no longer says "Phase 1". Verified with
+  `npm run typecheck` exit 0; the live path was not re-driven with the engine after the change.
+
 ## [0.1.0] — 2026-11-14 — M1, tag `m1-first-answer`
 
 M1 is "one real answer end to end": the approved Chat screen talks to a real local GGUF model

@@ -64,7 +64,7 @@ Agents: **A** = this session (opencode, worktree `D:\NEXUS-AI-m1`, branch `m1-fi
 | 26 | Test `chat.send` cancelled-while-loading | `crates/nexus-core/src/dispatch.rs` (after 25) | Either | todo | returns `job.cancelled` |
 | 27 | Live tests skip cleanly when `NEXUS_LIVE_ENGINE` unset | `crates/nexus-core/src/dispatch.rs`, `inference.rs` | Either | todo | plain `cargo test` passes fast, no engine spawn |
 | 28 | Document `NEXUS_CDP_PORT` / WebView2 debugging (dev-only) | `AGENTS.md` (after 3) | Either | done | `AGENTS.md` → "Live UI gate" block (port 9333, second terminal, gate driver) plus `tools/README.md` env overrides `NEXUS_CDP_PORT`, `NEXUS_SHOT`, `NEXUS_GATE_OUT`; no secret committed |
-| 29 | Models page honesty audit | `src/pages/Models.tsx` | Either | todo | every mock action has a `DemoNotice` or refuses honestly |
+| 29 | Models page honesty audit | `src/pages/Models.tsx` | A | done | `Set active` now marks active only after `engine.loadModel` succeeds; live catalog rows show `Not on disk — mock catalog row` and hide the details-modal button; download toast corrected; `npm run typecheck` exit 0 (live path not re-driven) |
 | 36 | Move UI fonts into the bundle (no font CDN) | `index.html`, `src/main.tsx`, `tailwind.config.js`, `package.json`, `package-lock.json` | A | done | `@fontsource-variable/inter` + `jetbrains-mono`; `dist/index.html` has no `http(s)://`; runtime check `interLoaded:true`, `monoLoaded:true`, only `http://ipc.localhost/ipc` — `TEST_RESULTS.md` §7, D-037 |
 | 37 | Triage the `npm audit` advisories | `TECHNICAL_DEBT.md` | A | done | `npm audit --json` on 2026-11-14: 4 vulnerabilities (3 moderate, 1 high) in `vite`/`esbuild` dev tooling and `react-router`; recorded as TD-17 with trigger, nothing upgraded |
 
