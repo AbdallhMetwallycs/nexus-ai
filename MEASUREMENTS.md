@@ -522,3 +522,10 @@ next message - all loopback-only.
 section 13 prefill finding still governs); conversation state is still in memory, so the gate starts
 from an empty chat each launch.
 
+**Re-run after vendoring the fonts (2026-11-14T14:01:27Z–14:02:22Z, exit 0):** first answer 24413 ms
+(`NEXUS OK`, context 122), Stop held at 5 characters, crash banner after 1651 ms, recovery 20427 ms,
+0 external requests, 0 console errors. The delta from the numbers above is run-to-run timing only.
+An earlier attempt the same hour was refused at admission because 1.3 GB was free; see
+`TEST_RESULTS.md` section 8.
+
+

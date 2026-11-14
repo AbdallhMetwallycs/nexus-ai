@@ -22,6 +22,7 @@ more expensive than the fix.
 | TD-14 | Context bounds are literals outside `admission` | Changing context limits or exposing a setting |
 | TD-15 | Engine stdout/stderr is discarded; no structured log | First field bug that needs engine output |
 | TD-16 | The UI gate is manual and needs a running app | CI or nightly regression |
+| TD-17 | `npm audit` reports 4 advisories (3 moderate, 1 high), all in build/dev tooling except react-router | Before M6 packaging, or when routing accepts external URLs |
 
 ## TD-1 — No installer, signing, notarization or updater
 
@@ -195,3 +196,25 @@ headless substitute would have missed both M1 defects (the Vite `EBUSY` crash an
 `try_wait` lag).
 **Trigger.** CI or a nightly regression machine that can run a real WebView2 and a real model.
 Until then, keep it in the pre-tag checklist (`AGENTS.md`).
+
+## TD-17 — Dependency advisories reported by `npm audit`
+
+**What.** `npm install` on 2026-11-14 reported **4 vulnerabilities (3 moderate, 1 high)**. Triage
+from `npm audit --json`:
+
+| Package | Severity | Advisory surface |
+| --- | --- | --- |
+| `vite` (≤6.4.3) | high | dev-server middleware, `server.fs.deny` bypass on Windows, and `launch-editor` UNC/argument handling |
+| `esbuild` (≤0.24.2, via Vite) | moderate | dev server lets a website send requests to it and read responses |
+| `react-router` / `react-router-dom` (6.0.0–7.17.0) | moderate | open redirect via backslash in `<Link>`/`useNavigate`; SSR hydration `deserializeErrors()` injection |
+
+**Why it exists.** The dev toolchain is pinned to Vite 5 (`package.json`) and react-router is the
+approved Phase 1 UI dependency. Both are pinned deliberately; a major upgrade is not a hygiene edit.
+Vite/esbuild advisories concern a development server bound to this machine, not code that ships in
+the bundle. The react-router advisories need either SSR (this app has none) or navigation to an
+attacker-supplied URL (routes are static and reached by an in-app hash).
+**Trigger.** Before M6 packaging, before any installer, or the first time a route or redirect takes
+an externally supplied URL. Then upgrade Vite (major) and react-router together and re-run
+`npm run build`, `npm run typecheck` and the UI gate.
+
+**Verified-not-fixed:** this row records the audit output; nothing was upgraded in M1.

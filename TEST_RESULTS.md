@@ -200,3 +200,35 @@ tested has no monospace element — `monoLoaded: true` is the direct check.
 
 Recorded as D-037; closes KI-10 and TD-3.
 
+## 8. Post-font confirmation of the M1 gate (2026-11-14)
+
+The gate was re-run after the font change to prove the bundle swap did not disturb the chat path.
+Run window `2026-11-14T14:01:27.702Z` → `14:02:22.939Z`, exit 0, same driver and same pinned engine
+and model. Screenshot was written to a temporary path
+(`%TEMP%\opencode\m1-post-font.png`) so the committed `screenshots/m1-live-ui-gate.png` stays the
+original evidence image.
+
+```
+[stream-started]  {"afterClickMs":26,"stopLabel":"Loading…"}
+[first-characters] {"msSinceSend":23778,"text":"NEXUS"}
+[answer-complete] {"totalMs":24413,"text":"NEXUS OK","context":"122","error":null}
+[stop]            {"charsBeforeStop":5,"note":"Stopped — this answer is incomplete.",
+                   "streamingAfter":false,"charsAfterSettle":5,"sendBack":true}
+[engine-killed]   {"killOutput":"SUCCESS: … PID 3640 …","charsBefore":7,
+                   "banner":"engine.crashed: The local engine stopped while answering. The next message will restart it.",
+                   "thinking":false,"failedNote":true,"waitedMs":1651}
+[recovered]       {"ms":20427,"text":"RECOVERED"}
+[network]         {"externalRequestCount":0,"external":[]}
+```
+
+`"consoleErrors": []`. The numbers differ from §4 only by run-to-run timing (24.4 s vs 22.2 s cold,
+20.4 s vs 22.3 s recovery); the text and the contract errors are identical.
+
+**A failed first attempt is itself evidence.** Before this run, free RAM was 1.3 GB because an
+orphaned `llama-server` from the crash test was still resident. The app did not try to load anyway:
+Chat answered `This model does not fit the memory free right now, so it was not loaded.` and the
+gate failed at the next step because no generation had started. That is the fail-closed admission
+rule behaving as specified; the orphan was terminated (`Stop-Process`), free RAM rose to 5.2 GB, the
+window was reloaded, and the run above passed.
+
+
