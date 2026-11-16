@@ -26,6 +26,7 @@ npm-debug.log*
 src-tauri/target/
 src-tauri/gen/
 .ui-gate.json
+.m2-gate.json
 
 # models/          # GGUF weights stay out of the repo by design
 # nexus.db*

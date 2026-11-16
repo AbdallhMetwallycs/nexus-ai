@@ -33,3 +33,22 @@ Steps it asserts: `answer-complete`, `stop` (no character growth 2.5 s after Sto
 Env overrides: `NEXUS_CDP_PORT`, `NEXUS_SHOT`, `NEXUS_GATE_OUT`.
 
 Exit code 0 means every step completed. The evidence file is written on failure too, with `error`.
+
+## m2-gate.mjs — persistence evidence (M2)
+
+Calls the same `ipc` command the UI calls, from inside the running window, in two phases with a
+real restart in between:
+
+```powershell
+# first launch (Vite on :5173 + the window with DevTools on 9333)
+node tools/m2-gate.mjs seed
+taskkill /F /IM nexus-ai.exe
+# launch the app again
+node tools/m2-gate.mjs verify
+```
+
+`seed` creates a conversation and writes `appearance.theme` and `models.active`. `verify` reads
+them back after the restart, checks that the renderer painted `html.light`, then runs
+`store.backup`, `store.restore` with the path the backup returned, and compares conversation row
+counts before and after. It writes `.m2-gate.json` (gitignored) and exits 0 only when every step
+passed. Env: `NEXUS_CDP_PORT`, `NEXUS_GATE_OUT`.

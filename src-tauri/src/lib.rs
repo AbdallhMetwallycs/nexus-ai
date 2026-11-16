@@ -4,7 +4,7 @@
 //!
 //! 1. **One dispatcher, no per-command bodies.** `src/contract/client.ts` invokes the single
 //!    Tauri command `ipc` with `{ command, args }`; `nexus_core::dispatch::Core` decides what
-//!    is real. This keeps the 96-command contract authoritative in one Rust match, and it
+//!    is real. This keeps the 97-command contract authoritative in one Rust match, and it
 //!    works around a Tauri limitation: command names are Rust identifiers, so a dotted
 //!    contract name (`chat.send`) cannot itself be registered.
 //! 2. **Stop never queues behind work.** `chat.stop` flips the shared `CancelFlag` before

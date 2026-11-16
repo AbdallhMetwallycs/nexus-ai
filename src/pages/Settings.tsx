@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowRight,
@@ -44,23 +44,89 @@ import { INTERNET_PERMISSION_DEFAULTS } from '../data/internet';
 import { usePlatform } from '../state/PlatformContext';
 import { useTheme } from '../theme/ThemeContext';
 import { cn, formatBytes } from '../lib/utils';
+import { resolveTransport } from '../contract/client';
+import type { BackupRecord, SettingsSectionId, SettingValue } from '../contract/ipc';
+
+/** The desktop build has a real core behind it; the browser build is a demo. */
+function useLive() {
+  const transport = useMemo(() => resolveTransport(), []);
+  return { transport, live: transport.kind === 'tauri' };
+}
+
+/** Bytes → the GB form `formatBytes` expects. */
+function bytesToGB(bytes: number): number {
+  return bytes / 1024 ** 3;
+}
 
 /* ------------------------------------------------------------------ */
 /* Shared page-local machinery: dirty-tracked section state            */
 /* ------------------------------------------------------------------ */
 
-function useSection<T extends object>(initial: T) {
+/**
+ * Section values live in component state and, in the desktop build, in the local
+ * database. Saving with a `section` calls `settings.patch`; the browser demo says
+ * plainly that the save lasted only for this tab.
+ */
+function useSection<T extends object>(initial: T, section?: SettingsSectionId) {
   const { toast } = useToast();
+  const { transport, live } = useLive();
   const [saved, setSaved] = useState<T>(initial);
   const [values, setValues] = useState<T>(initial);
+  const [loaded, setLoaded] = useState(!live || !section);
   const dirty = JSON.stringify(values) !== JSON.stringify(saved);
   const patch = (p: Partial<T>) => setValues((prev) => ({ ...prev, ...p }));
+
+  // Load what the owner saved before, once per mount.
+  useEffect(() => {
+    if (!live || !section) return;
+    let cancelled = false;
+    void (async () => {
+      const res = await transport.call('settings.get');
+      if (cancelled) return;
+      if (res.ok) {
+        const stored = res.data.sections[section] ?? {};
+        const merged = { ...initial } as T;
+        for (const key of Object.keys(initial) as (keyof T)[]) {
+          const value = stored[key as string];
+          if (typeof value === typeof initial[key]) merged[key] = value as T[keyof T];
+        }
+        setSaved(merged);
+        setValues(merged);
+      }
+      setLoaded(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // `initial` is a per-section literal; reloading on every render would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const save = () => {
-    setSaved(values);
-    toast('Preference saved to prototype state', 'success');
+    if (!live || !section) {
+      setSaved(values);
+      toast(
+        live ? 'Preference saved for this screen only' : 'Preference saved in this browser session only',
+        'success',
+      );
+      return;
+    }
+    void (async () => {
+      const res = await transport.call('settings.patch', {
+        section,
+        values: values as unknown as Record<string, SettingValue>,
+      });
+      if (!res.ok) {
+        toast(`${res.error.code}: ${res.error.message}`, 'error');
+        return;
+      }
+      setSaved(values);
+      toast('Preference saved to the local database', 'success');
+    })();
   };
+
   const discard = () => setValues(saved);
-  return { values, saved, patch, dirty, save, discard };
+  return { values, saved, patch, dirty, save, discard, loaded };
 }
 
 function DirtyFooter({
@@ -148,13 +214,22 @@ type SectionId = (typeof SECTIONS)[number]['id'];
 
 export default function Settings() {
   const [section, setSection] = useState<SectionId>('general');
+  const { live } = useLive();
 
   return (
     <WorkArea>
       <PageHeader
         title="Settings"
-        description="All platform preferences in one place. Real frontend effects (theme, font scale, active model) apply immediately; everything else is honest prototype state."
-        notice={<DemoNotice text="Saving a preference writes to React state only — no registry, no config file, no network." />}
+        description={
+          live
+            ? 'All platform preferences in one place. Theme, font scale and the active model apply immediately; saved sections are written to the local database.'
+            : 'All platform preferences in one place. Real frontend effects (theme, font scale, active model) apply immediately; everything else is honest prototype state.'
+        }
+        notice={
+          live ? undefined : (
+            <DemoNotice text="Saving a preference writes to React state only — no registry, no config file, no network." />
+          )
+        }
       />
       <div className="flex gap-5 p-5">
         {/* Sub-navigation (local state, not routes) */}
@@ -210,12 +285,12 @@ function GeneralSection() {
   const { theme, setTheme } = useTheme();
   const { toast } = useToast();
   const [mode, setMode] = useState<'light' | 'dark' | 'system'>(theme);
-  const s = useSection({ startPage: 'dashboard', autoStart: false, density: 'comfortable' });
+  const s = useSection({ startPage: 'dashboard', autoStart: false, density: 'comfortable' }, 'general');
 
   const pickMode = (m: 'light' | 'dark' | 'system') => {
     setMode(m);
     if (m === 'system') {
-      toast('System auto-switching ships with Phase 2 — keeping the current theme', 'info');
+      toast('System auto-switching is not implemented — keeping the current theme', 'info');
     } else {
       setTheme(m);
     }
@@ -237,7 +312,7 @@ function GeneralSection() {
                 { value: 'agents', label: 'Agents' },
                 { value: 'models', label: 'Model Manager' },
               ]}
-              hint="Would open after launch — remembered in prototype state."
+              hint="Would open after launch once startup behaviour is wired — this value is saved but not yet acted on."
             />
             <Select
               label="Interface density"
@@ -345,7 +420,7 @@ function applyFontScale(v: number) {
 function AppearanceSection() {
   const { theme, setTheme } = useTheme();
   const { toast } = useToast();
-  const s = useSection({ fontScale: 1 });
+  const s = useSection({ fontScale: 1 }, 'appearance');
 
   const setScale = (v: number) => {
     s.patch({ fontScale: v });
@@ -493,7 +568,7 @@ const LANGUAGES: { value: string; label: string; greeting: string }[] = [
 
 function LanguageSection() {
   const { toast } = useToast();
-  const s = useSection({ language: 'en' });
+  const s = useSection({ language: 'en' }, 'language');
   const current = LANGUAGES.find((l) => l.value === s.values.language) ?? LANGUAGES[0];
 
   return (
@@ -519,7 +594,7 @@ function LanguageSection() {
               </p>
               {current.value === 'ar' && (
                 <p className="mt-2">
-                  <Badge tone="idle">full RTL layout ships with Phase 2</Badge>
+                  <Badge tone="idle">full RTL layout is not implemented yet</Badge>
                 </p>
               )}
             </div>
@@ -536,7 +611,7 @@ function LanguageSection() {
 /* ------------------------------------------------------------------ */
 
 function HardwareSection() {
-  const s = useSection({ ramFloor: '4', gpuOffload: false, power: 'balanced' });
+  const s = useSection({ ramFloor: '4', gpuOffload: false, power: 'balanced' }, 'hardware');
   const ramNum = Number(s.values.ramFloor);
   const ramInvalid = s.values.ramFloor.trim() === '' || Number.isNaN(ramNum) || ramNum < 1 || ramNum > 32;
 
@@ -616,7 +691,7 @@ function HardwareSection() {
 function ModelsSection() {
   const { toast } = useToast();
   const { activeModelId, setActiveModelId } = usePlatform();
-  const s = useSection({ preferQuant: true, maxConcurrent: '2' });
+  const s = useSection({ preferQuant: true, maxConcurrent: '2' }, 'models');
   const maxNum = Number(s.values.maxConcurrent);
   const maxInvalid = s.values.maxConcurrent.trim() === '' || Number.isNaN(maxNum) || maxNum < 1 || maxNum > 8;
 
@@ -713,7 +788,7 @@ function AgentsSection() {
       <Card>
         <CardHeader
           title="Agents"
-          subtitle="Enable/disable and assign a default model per agent — config persists only in prototype state"
+          subtitle="Enable/disable and assign a default model per agent — this screen is still simulated; agent execution is an M3+ milestone"
         />
         <CardBody className="pt-1">
           <ul className="divide-y divide-surface-line">
@@ -753,7 +828,7 @@ function AgentsSection() {
         dirty={dirty}
         onSave={() => {
           setSaved(rows);
-          toast('Preference saved to prototype state', 'success');
+          toast('Saved for this screen only — agent config is not persisted yet', 'success');
         }}
         onDiscard={() => setRows(saved)}
       />
@@ -767,8 +842,31 @@ function AgentsSection() {
 
 function MemorySection() {
   const { toast } = useToast();
-  const s = useSection({ autoCapture: true, requireApproval: true, retention: '30' });
+  const { transport, live } = useLive();
+  const s = useSection({ autoCapture: true, requireApproval: true, retention: '30' }, 'memory');
   const [purgeOpen, setPurgeOpen] = useState(false);
+
+  const purge = () => {
+    setPurgeOpen(false);
+    if (!live) {
+      toast('Nothing to purge — the browser demo keeps memory in React state only', 'info');
+      return;
+    }
+    void (async () => {
+      const res = await transport.call('store.purge', { kind: 'short_term_memory' });
+      if (!res.ok) {
+        toast(`${res.error.code}: ${res.error.message}`, 'error');
+        return;
+      }
+      const { removed, freedBytes } = res.data;
+      toast(
+        removed === 0
+          ? 'No short-term records were older than the retention window; nothing was deleted'
+          : `Removed ${removed} short-term record${removed === 1 ? '' : 's'} and freed ${formatBytes(bytesToGB(freedBytes))}`,
+        'success',
+      );
+    })();
+  };
 
   return (
     <>
@@ -787,7 +885,11 @@ function MemorySection() {
                 { value: '365', label: '365 days' },
                 { value: 'never', label: 'Keep forever' },
               ]}
-              hint="Applies to short-tier memories only; long-term records never expire automatically."
+              hint={
+                live
+                  ? 'Saved as a preference. The purge below uses the store’s fixed windows (short tier: 1 day, archived: 30 days) until M3 wires this value in.'
+                  : 'Applies to short-tier memories only; long-term records never expire automatically.'
+              }
             />
           </div>
           <div className="divide-y divide-surface-line">
@@ -817,7 +919,10 @@ function MemorySection() {
       </Card>
 
       <Card>
-        <CardHeader title="Danger zone" subtitle="Short-term memory lives in prototype state only" />
+        <CardHeader
+          title="Danger zone"
+          subtitle={live ? 'Deletes rows from the local database — there is no undo' : 'Short-term memory lives in prototype state only'}
+        />
         <CardBody className="pt-2">
           <Button variant="danger" onClick={() => setPurgeOpen(true)}>
             Purge short-term memory
@@ -828,14 +933,15 @@ function MemorySection() {
       <ConfirmDialog
         open={purgeOpen}
         title="Purge short-term memory?"
-        message="In Phase 2 this would delete every short-tier record after asking each affected agent to say goodbye to it. Today there is nothing to purge."
-        confirmLabel="Purge (simulated)"
+        message={
+          live
+            ? 'Deletes every short-tier memory row older than one day and every archived row older than 30 days from the local database, then vacuums the file. This cannot be undone.'
+            : 'The browser demo keeps memory in React state; there is nothing to delete.'
+        }
+        confirmLabel={live ? 'Purge' : 'Purge (simulated)'}
         danger
         onCancel={() => setPurgeOpen(false)}
-        onConfirm={() => {
-          setPurgeOpen(false);
-          toast('nothing to purge (prototype state)', 'info');
-        }}
+        onConfirm={purge}
       />
 
       <DirtyFooter dirty={s.dirty} onSave={s.save} onDiscard={s.discard} />
@@ -905,7 +1011,7 @@ const APPROVAL_OPERATIONS = [
 ];
 
 function SecuritySection() {
-  const s = useSection({ redact: true });
+  const s = useSection({ redact: true }, 'security');
 
   return (
     <>
@@ -920,7 +1026,7 @@ function SecuritySection() {
               </li>
             ))}
           </ul>
-          <p className="mt-2 text-2xs text-ink-faint">Static checklist in Phase 1 — prompts become live in Phase 2.</p>
+          <p className="mt-2 text-2xs text-ink-faint">Static checklist — approval prompts are not implemented, so nothing here is enforced yet.</p>
         </CardBody>
       </Card>
 
@@ -957,7 +1063,27 @@ const DATA_ROWS = ['Conversations', 'Memories', 'Knowledge Base documents', 'Tel
 
 function PrivacySection() {
   const { toast } = useToast();
-  const s = useSection({ telemetry: false });
+  const { transport, live } = useLive();
+  const s = useSection({ telemetry: false }, 'privacy');
+  const [exporting, setExporting] = useState(false);
+
+  const exportMyData = () => {
+    if (!live) {
+      toast('The browser demo has no database — there is nothing to export', 'info');
+      return;
+    }
+    if (exporting) return;
+    setExporting(true);
+    void (async () => {
+      const res = await transport.call('store.export', { format: 'json' });
+      setExporting(false);
+      if (!res.ok) {
+        toast(`${res.error.code}: ${res.error.message}`, 'error');
+        return;
+      }
+      toast(`Exported ${formatBytes(bytesToGB(res.data.bytes))} of owner data to ${res.data.path}`, 'success');
+    })();
+  };
 
   return (
     <>
@@ -969,13 +1095,15 @@ function PrivacySection() {
               <li key={r} className="flex items-center justify-between gap-3 py-2">
                 <span className="text-xs text-ink-secondary">{r}</span>
                 <span className="flex items-center gap-2 text-xs font-medium text-ink-primary">
-                  <StatusDot tone="ok" /> Local
+                  <StatusDot tone={live ? 'ok' : 'idle'} /> {live ? 'Local database' : 'Browser session'}
                 </span>
               </li>
             ))}
           </ul>
           <p className="mt-2 text-2xs text-ink-faint">
-            In this prototype "local" means React state in your browser tab — nothing is persisted to disk yet.
+            {live
+              ? 'Everything above is written to one SQLite file under %APPDATA%\\NexusAI on this machine. Knowledge Base documents arrive in M3.'
+              : 'In this prototype "local" means React state in your browser tab — nothing is persisted to disk.'}
           </p>
         </CardBody>
       </Card>
@@ -986,7 +1114,7 @@ function PrivacySection() {
           <div className="divide-y divide-surface-line">
             <SettingRow
               label="Send usage analytics"
-              desc="Default OFF. none is sent anywhere; Phase 1 cannot send anything."
+              desc={live ? 'Default OFF. No code path sends anything off this machine.' : 'Default OFF. none is sent anywhere; Phase 1 cannot send anything.'}
               tip="The switch exists to make the intent explicit: telemetry is opt-in, never on by default."
             >
               <Toggle checked={s.values.telemetry} onChange={(v) => s.patch({ telemetry: v })} label="Send usage analytics" />
@@ -996,7 +1124,8 @@ function PrivacySection() {
             variant="secondary"
             className="mt-3"
             icon={<Download size={13} />}
-            onClick={() => toast('Data export is simulated — there is nothing to export yet', 'info')}
+            loading={exporting}
+            onClick={exportMyData}
           >
             Export my data
           </Button>
@@ -1012,43 +1141,81 @@ function PrivacySection() {
 /* Backup                                                              */
 /* ------------------------------------------------------------------ */
 
-interface BackupRow {
-  id: string;
-  name: string;
-  sizeGB: number;
-}
-
-const INITIAL_BACKUPS: BackupRow[] = [
-  { id: 'bk-1', name: 'nexus-backup-2026-11-02-09-14.zip', sizeGB: 2.4 },
-  { id: 'bk-2', name: 'nexus-backup-2026-10-26-21-40.zip', sizeGB: 2.3 },
-  { id: 'bk-3', name: 'nexus-backup-2026-10-19-08-05.zip', sizeGB: 2.1 },
-];
-
-function validateBackupPath(raw: string): string | null {
-  const p = raw.trim();
-  if (!p) return 'Path is required.';
-  if (!/^([A-Za-z]:\\|\\\\)/.test(p)) return 'Must start with a drive letter (X:\\…) or a UNC path (\\\\server\\share).';
-  return null;
-}
-
 function BackupSection() {
   const { toast } = useToast();
-  const s = useSection({ location: 'D:\\NEXUS-AI\\backups' });
-  const locationError = validateBackupPath(s.values.location);
-  const [backups, setBackups] = useState<BackupRow[]>(INITIAL_BACKUPS);
+  const { transport, live } = useLive();
+  const [backups, setBackups] = useState<BackupRecord[]>([]);
+  const [loading, setLoading] = useState(live);
   const [creating, setCreating] = useState(false);
-  const [restoring, setRestoring] = useState<BackupRow | null>(null);
+  const [restoring, setRestoring] = useState<BackupRecord | null>(null);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+
+  const loadBackups = async () => {
+    const res = await transport.call('store.backups');
+    if (!res.ok) {
+      toast(`${res.error.code}: ${res.error.message}`, 'error');
+      return;
+    }
+    setBackups(res.data);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    if (!live) return;
+    let cancelled = false;
+    void (async () => {
+      const res = await transport.call('store.backups');
+      if (cancelled) return;
+      setLoading(false);
+      if (!res.ok) {
+        toast(`${res.error.code}: ${res.error.message}`, 'error');
+        return;
+      }
+      setBackups(res.data);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [live, transport, toast]);
 
   const createBackup = () => {
+    if (!live) {
+      toast('Creating a backup needs the desktop build; the browser demo has no database to copy', 'warning');
+      return;
+    }
     if (creating) return;
     setCreating(true);
-    window.setTimeout(() => {
-      const now = new Date();
-      const stamp = now.toISOString().slice(0, 16).replace(/[T:]/g, '-');
-      setBackups((prev) => [{ id: `bk-${now.getTime()}`, name: `nexus-backup-${stamp}.zip`, sizeGB: 2.2 + prev.length * 0.1 }, ...prev]);
+    void (async () => {
+      const res = await transport.call('store.backup');
       setCreating(false);
-      toast('Backup created (simulated — no file was written)', 'success');
-    }, 1200);
+      if (!res.ok) {
+        toast(`${res.error.code}: ${res.error.message}`, 'error');
+        return;
+      }
+      const { path, bytes, verified } = res.data;
+      toast(
+        `${verified ? 'Backup written and integrity-checked' : 'Backup written (integrity check did not pass)'}: ${path} · ${formatBytes(bytesToGB(bytes))}`,
+        verified ? 'success' : 'warning',
+      );
+      await loadBackups();
+    })();
+  };
+
+  const restore = () => {
+    const target = restoring;
+    setRestoring(null);
+    if (!target || restoreBusy) return;
+    setRestoreBusy(true);
+    void (async () => {
+      const res = await transport.call('store.restore', { path: target.path });
+      setRestoreBusy(false);
+      if (!res.ok) {
+        toast(`${res.error.code}: ${res.error.message}`, 'error');
+        return;
+      }
+      toast(`Restored ${target.name}. The replaced state was saved first to ${res.data.previousBackup}`, 'success');
+      await loadBackups();
+    })();
   };
 
   return (
@@ -1056,41 +1223,57 @@ function BackupSection() {
       <Card>
         <CardHeader
           title="Backups"
-          subtitle="Snapshots of instructions, memory index and settings"
+          subtitle={
+            live
+              ? 'Verified snapshots of the local database, written next to it under %APPDATA%\\NexusAI\\backups'
+              : 'Snapshots of the local database — the browser demo has no database to copy'
+          }
           actions={
             <Button variant="primary" size="sm" loading={creating} onClick={createBackup}>
-              Create backup (simulated)
+              {live ? 'Create backup' : 'Create backup (needs desktop build)'}
             </Button>
           }
         />
         <CardBody className="pt-1">
-          {creating && <LoadingState label="Writing a fake archive… nothing touches your disk" className="py-4" />}
-          <ul className="divide-y divide-surface-line">
-            {backups.map((b) => (
-              <li key={b.id} className="flex items-center gap-3 py-2.5">
-                <HardDrive size={14} className="shrink-0 text-ink-faint" />
-                <span className="mono-num min-w-0 flex-1 truncate text-xs text-ink-primary">{b.name}</span>
-                <span className="mono-num shrink-0 text-2xs text-ink-muted">{formatBytes(b.sizeGB)}</span>
-                <Button size="xs" variant="ghost" onClick={() => setRestoring(b)}>
-                  Restore
-                </Button>
-              </li>
-            ))}
-          </ul>
+          {loading && <LoadingState label="Reading the backup folder…" className="py-4" />}
+          {!loading && backups.length === 0 && (
+            <p className="py-3 text-xs text-ink-muted">
+              {live
+                ? 'No backups yet. “Create backup” copies the database, keeps the copy beside the original, and verifies it before reporting success.'
+                : 'No backups. The browser demo never writes files, so this list stays empty.'}
+            </p>
+          )}
+          {backups.length > 0 && (
+            <ul className="divide-y divide-surface-line">
+              {backups.map((b) => (
+                <li key={b.id} className="flex items-center gap-3 py-2.5">
+                  <HardDrive size={14} className="shrink-0 text-ink-faint" />
+                  <span className="min-w-0 flex-1">
+                    <span className="mono-num block truncate text-xs text-ink-primary">{b.name}</span>
+                    <span className="block truncate text-2xs text-ink-faint">
+                      {new Date(b.createdAt).toLocaleString()} · schema v{b.schemaVersion}
+                      {b.verified ? ' · verified' : ' · NOT verified'}
+                    </span>
+                  </span>
+                  <span className="mono-num shrink-0 text-2xs text-ink-muted">{formatBytes(bytesToGB(b.sizeBytes))}</span>
+                  <Button size="xs" variant="ghost" disabled={restoreBusy} onClick={() => setRestoring(b)}>
+                    Restore
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
         </CardBody>
       </Card>
 
       <Card>
-        <CardHeader title="Backup location" />
+        <CardHeader title="Where backups go" />
         <CardBody className="pt-2">
-          <Input
-            label="Archive folder"
-            value={s.values.location}
-            onChange={(e) => s.patch({ location: e.target.value })}
-            error={locationError}
-            hint={'Must be a local path like D:\\NEXUS-AI\\backups or a UNC share \\\\server\\share.'}
-            className="mono-num"
-          />
+          <p className="text-xs leading-relaxed text-ink-muted">
+            {live
+              ? 'The core writes each backup beside the live database and records it in a table, so this list reflects files that exist. A custom archive folder is not implemented yet.'
+              : 'The browser demo has no archive folder: nothing is written to disk.'}
+          </p>
         </CardBody>
       </Card>
 
@@ -1099,25 +1282,15 @@ function BackupSection() {
         title={`Restore ${restoring?.name ?? ''}?`}
         message={
           <>
-            Restoring would <strong>overwrite current instructions, memory index and settings</strong> with the
-            snapshot. In Phase 1 this is a warning UI only — no file is read or replaced.
+            Restoring <strong>replaces the current conversations, settings and memory rows</strong> with the
+            snapshot. The core first copies the current database to a pre-restore file and verifies the snapshot
+            before swapping.
           </>
         }
-        confirmLabel="Restore (simulated)"
+        confirmLabel="Restore"
         danger
         onCancel={() => setRestoring(null)}
-        onConfirm={() => {
-          toast('Restore is simulated — nothing was touched on disk', 'info');
-          setRestoring(null);
-        }}
-      />
-
-      <DirtyFooter
-        dirty={s.dirty}
-        onSave={s.save}
-        onDiscard={s.discard}
-        invalid={locationError !== null}
-        invalidMsg="Fix the backup path before saving."
+        onConfirm={restore}
       />
     </>
   );
@@ -1129,7 +1302,7 @@ function BackupSection() {
 
 function PortabilitySection() {
   const { toast } = useToast();
-  const planned = () => toast('planned for Phase 2 (Tauri packaging)', 'info');
+  const planned = () => toast('Portable packaging is milestone M6 — not implemented in this build', 'info');
 
   return (
     <>
@@ -1138,9 +1311,9 @@ function PortabilitySection() {
           <CardHeader title="Portable folder mode" />
           <CardBody className="pt-2">
             <p className="text-xs leading-relaxed text-ink-muted">
-              A self-contained NEXUS folder you can copy to another Windows machine — settings, instructions and the
-              local model directory travel with it. Packaging ships with the Phase 2 Tauri build; the prototype
-              installs no runtime and has no external dependency (no Qoder bundling required).
+              A self-contained NEXUS folder you could copy to another Windows machine — database, settings and the
+              local model directory travelling together. Packaging is milestone M6 in PHASE2_MILESTONES.md; this
+              build installs nothing outside its own data folder and has no external dependency.
             </p>
             <Button variant="secondary" className="mt-3" onClick={planned}>
               Enable portable mode
@@ -1152,8 +1325,8 @@ function PortabilitySection() {
           <CardBody className="pt-2">
             <p className="text-xs leading-relaxed text-ink-muted">
               Point NEXUS at a portable folder or a backup archive and it would reconcile memory, KB index and agent
-              config — with a preview of conflicts before anything is written. Windows first; other platforms are out
-              of scope for Phase 1.
+              config — with a preview of conflicts before anything is written. Backup files created by this build
+              already restore through Backup → Restore; the import wizard itself is not implemented.
             </p>
             <Button variant="secondary" className="mt-3" onClick={planned}>
               Import wizard
@@ -1162,7 +1335,7 @@ function PortabilitySection() {
         </Card>
       </div>
       <p className="text-2xs text-ink-faint">
-        Both flows are honest placeholders today — clicking them states the phase instead of faking progress.
+        Both flows are honest placeholders — clicking them names the milestone instead of faking progress.
       </p>
     </>
   );
@@ -1174,6 +1347,7 @@ function PortabilitySection() {
 
 function AboutSection() {
   const { toast } = useToast();
+  const { live } = useLive();
   const [checking, setChecking] = useState(false);
   const [licenseOpen, setLicenseOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
@@ -1190,20 +1364,30 @@ function AboutSection() {
   return (
     <>
       <Card>
-        <CardHeader title="NEXUS AI" subtitle="Local AI Agent Platform — UI prototype" />
+        <CardHeader
+          title="NEXUS AI"
+          subtitle={live ? 'Local AI Agent Platform — Phase 2 desktop build' : 'Local AI Agent Platform — UI prototype'}
+        />
         <CardBody className="pt-2">
           <div className="flex items-center gap-4">
             <Logo size={48} />
             <div>
               <p className="text-lg font-bold tracking-tight text-ink-primary">NEXUS AI</p>
-              <p className="text-xs text-ink-muted">Offline-first. Local by design. Honest about what is simulated.</p>
+              <p className="text-xs text-ink-muted">
+                {live
+                  ? 'Offline-first. Local by design. A real engine and a local database behind this screen.'
+                  : 'Offline-first. Local by design. Honest about what is simulated.'}
+              </p>
             </div>
           </div>
           <div className="mt-4 space-y-0.5">
-            <KeyValue k="Version" v="0.1.0 — Phase 1" mono />
-            <KeyValue k="Build channel" v="ui-prototype" mono />
-            <KeyValue k="Engine" v="None — frontend only" />
-            <KeyValue k="Persistence" v="React state + localStorage flags" />
+            <KeyValue k="Version" v={live ? '0.1.0 — Phase 2 (M2)' : '0.1.0 — Phase 1'} mono />
+            <KeyValue k="Build channel" v={live ? 'tauri-desktop' : 'ui-prototype'} mono />
+            <KeyValue k="Engine" v={live ? 'llama-server sidecar — state on Dashboard' : 'None — frontend only'} />
+            <KeyValue
+              k="Persistence"
+              v={live ? 'SQLite database under %APPDATA%\\NexusAI' : 'React state + localStorage flags'}
+            />
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => setLicenseOpen(true)}>
@@ -1220,19 +1404,26 @@ function AboutSection() {
         </CardBody>
       </Card>
 
-      <Modal open={licenseOpen} onClose={() => setLicenseOpen(false)} title="License" subtitle="Prototype content terms" size="md">
+      <Modal
+        open={licenseOpen}
+        onClose={() => setLicenseOpen(false)}
+        title="License"
+        subtitle={live ? 'Pre-1.0 development build' : 'Prototype content terms'}
+        size="md"
+      >
         <div className="space-y-3 text-xs leading-relaxed text-ink-secondary">
           <p>
-            NEXUS AI Phase 1 is a design prototype. The interface may be evaluated internally; it is not a licensed
+            NEXUS AI is a pre-1.0 development build. The interface may be evaluated internally; it is not a licensed
             product and confers no rights to any backend, model weights, or trademark.
           </p>
           <p>
-            All displayed data — conversations, agents, models, telemetry, activity events — is mock content authored
-            for demonstration. No third-party model output is included.
+            {live
+              ? 'Conversations, messages, settings, activity and memory rows shown in this build come from the local database. Catalogs and screens without a core command behind them stay labelled as simulated.'
+              : 'All displayed data — conversations, agents, models, telemetry, activity events — is mock content authored for demonstration. No third-party model output is included.'}
           </p>
           <p>
             The final application will ship under the commercial license announced at general availability. Until
-            then, treat this build as "everything shown is simulated".
+            then, treat this build as a development artifact, not a release.
           </p>
         </div>
       </Modal>
@@ -1240,18 +1431,27 @@ function AboutSection() {
       <Modal
         open={notesOpen}
         onClose={() => setNotesOpen(false)}
-        title="Release notes — 0.1.0 (Phase 1)"
-        subtitle="Scope of the UI prototype"
+        title={live ? 'Release notes — 0.1.0 (Phase 2, M2)' : 'Release notes — 0.1.0 (Phase 1)'}
+        subtitle={live ? 'What this build actually does' : 'Scope of the UI prototype'}
         size="md"
       >
-        <ul className="space-y-2 text-xs leading-relaxed text-ink-secondary">
-          <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Eleven screens: Dashboard, Chat, Agents, Models, Knowledge, Memory, Tools, Learning Lab, Internet, Activity, Settings.</li>
-          <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Offline-first shell with mode chip, dark/light theme and density direction.</li>
-          <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Simulated chat loop with canned replies, attachments as UI-only chips, per-conversation model/agent choice.</li>
-          <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Internet policy, trusted sources and approval prompts — stated honestly as prototype state.</li>
-          <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Activity timeline with filter/search and pending-approval decisions.</li>
-          <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-warn" /> Not in this build: real inference, downloads, network calls, persistence, multi-user.</li>
-        </ul>
+        {live ? (
+          <ul className="space-y-2 text-xs leading-relaxed text-ink-secondary">
+            <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Real local inference through the pinned llama-server sidecar; answers stream from this machine.</li>
+            <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Conversations, messages, settings, activity and memory rows stored in SQLite under %APPDATA%\NexusAI.</li>
+            <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Verified database backup, guarded restore, JSON export of owner data and a short-term-memory purge.</li>
+            <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-warn" /> Still simulated in this build: agent execution, knowledge indexing, tools, internet policy, learning lab, model downloads.</li>
+          </ul>
+        ) : (
+          <ul className="space-y-2 text-xs leading-relaxed text-ink-secondary">
+            <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Eleven screens: Dashboard, Chat, Agents, Models, Knowledge, Memory, Tools, Learning Lab, Internet, Activity, Settings.</li>
+            <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Offline-first shell with mode chip, dark/light theme and density direction.</li>
+            <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Simulated chat loop with canned replies, attachments as UI-only chips, per-conversation model/agent choice.</li>
+            <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Internet policy, trusted sources and approval prompts — stated honestly as prototype state.</li>
+            <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Activity timeline with filter/search and pending-approval decisions.</li>
+            <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-warn" /> Not in this build: real inference, downloads, network calls, persistence, multi-user.</li>
+          </ul>
+        )}
       </Modal>
     </>
   );

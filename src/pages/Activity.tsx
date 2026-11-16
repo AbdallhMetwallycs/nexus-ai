@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ChevronDown,
@@ -27,6 +27,8 @@ import {
   type Tone,
 } from '../components/ui';
 import { ContextPanelCard, KeyValue, PageHeader, WorkArea } from '../components/common/PageChrome';
+import type { ActivityEvent as CoreActivityEvent } from '../contract/ipc';
+import { resolveTransport } from '../contract/client';
 import { MOCK_ACTIVITY } from '../data/activity';
 import { agentById } from '../data/agents';
 import type { ActivityEvent, ActivityKind } from '../data/types';
@@ -122,10 +124,42 @@ function statusTone(status: ActivityEvent['status']): Tone {
 
 export default function Activity() {
   const { toast } = useToast();
-  const [events, setEvents] = useState<ActivityEvent[]>(ALL_EVENTS);
+  const transport = useMemo(() => resolveTransport(), []);
+  const live = transport.kind === 'tauri';
+  const [events, setEvents] = useState<ActivityEvent[]>(live ? [] : ALL_EVENTS);
+  const [loading, setLoading] = useState(live);
   const [filter, setFilter] = useState<FilterId>('all');
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Live: the Activity Center reads the rows the core wrote, not a mock list.
+  useEffect(() => {
+    if (!live) return;
+    let cancelled = false;
+    void (async () => {
+      const listed = await transport.call('activity.list', { limit: 200 });
+      if (cancelled) return;
+      setLoading(false);
+      if (!listed.ok) {
+        toast(`${listed.error.code}: ${listed.error.message}`, 'error');
+        return;
+      }
+      setEvents(
+        listed.data.items.map((e: CoreActivityEvent) => ({
+          id: e.id,
+          ts: e.ts,
+          kind: e.kind as ActivityKind,
+          title: e.title,
+          detail: e.detail,
+          agentId: e.agentId,
+          status: e.status,
+        })),
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [live, transport, toast]);
 
   const counts = useMemo(() => {
     const map: Record<string, number> = { all: events.length };
@@ -145,6 +179,13 @@ export default function Activity() {
   const filtersActive = filter !== 'all' || search.trim() !== '';
 
   const decide = (id: string, approved: boolean) => {
+    if (live) {
+      toast(
+        'Approval decisions have no core command yet; nothing was changed.',
+        'info',
+      );
+      return;
+    }
     setEvents((prev) =>
       prev.map((e) =>
         e.id === id
@@ -152,7 +193,7 @@ export default function Activity() {
           : e,
       ),
     );
-    toast('Approval recorded in prototype state only', approved ? 'success' : 'warning');
+    toast('Approval recorded in this browser session only', approved ? 'success' : 'warning');
   };
 
   const today = {
@@ -167,20 +208,29 @@ export default function Activity() {
     <WorkArea
       contextPanel={
         <>
-          <ContextPanelCard title="Today (simulated)">
+          <ContextPanelCard title={live ? 'Today (recorded)' : 'Today (simulated)'}>
             <div className="space-y-0.5">
               <KeyValue k="Tasks" v={`${today.tasks} runs`} />
               <KeyValue k="Tool runs" v={`${today.tools} invocations`} />
               <KeyValue k="Errors" v={`${today.errors} recorded`} />
               <KeyValue k="Warnings" v={`${today.warnings} advisory`} />
             </div>
-            <p className="mt-2 text-2xs text-ink-faint">Derived from the mock event list on this screen.</p>
+            <p className="mt-2 text-2xs text-ink-faint">
+              {live ? 'Read from the activity table in the local database.' : 'Derived from the mock event list on this screen.'}
+            </p>
           </ContextPanelCard>
 
           <ContextPanelCard title="Reliability">
-            <Meter label="Error rate (mock)" value={failureRate} detail={`${failureRate}% of simulated events`} tone="auto" />
+            <Meter
+              label={live ? 'Error rate (recorded)' : 'Error rate (mock)'}
+              value={failureRate}
+              detail={`${failureRate}% of ${live ? 'recorded' : 'simulated'} events`}
+              tone="auto"
+            />
             <p className="mt-2.5 text-2xs leading-relaxed text-ink-faint">
-              No real logging exists in Phase 1 — nothing is written to disk and no engine reports these numbers.
+              {live
+                ? 'Computed from the rows the core wrote; no engine reports these numbers separately.'
+                : 'No real logging exists in the browser demo — nothing is written to disk and no engine reports these numbers.'}
             </p>
           </ContextPanelCard>
         </>
@@ -188,8 +238,16 @@ export default function Activity() {
     >
       <PageHeader
         title="Activity Center"
-        description="Everything the agents and tools would have done, as a simulated timeline. Newest events first."
-        notice={<DemoNotice text="This is an in-memory mock log — it is cleared on reload and never written anywhere." />}
+        description={
+          live
+            ? 'Every action the core and its dispatcher recorded, newest first, from the local database.'
+            : 'Everything the agents and tools would have done, as a simulated timeline. Newest events first.'
+        }
+        notice={
+          live ? undefined : (
+            <DemoNotice text="This is an in-memory mock log — it is cleared on reload and never written anywhere." />
+          )
+        }
         actions={
           <>
             {filtersActive && (
@@ -210,9 +268,22 @@ export default function Activity() {
               variant="secondary"
               size="sm"
               icon={<Download size={13} />}
-              onClick={() => toast('Export disabled in Phase 1 — this is UI-only data', 'warning')}
+              onClick={() => {
+                if (!live) {
+                  toast('Export needs the desktop build; the browser demo has no database behind this list', 'warning');
+                  return;
+                }
+                void (async () => {
+                  const result = await transport.call('activity.export', { format: 'json' });
+                  if (!result.ok) {
+                    toast(`${result.error.code}: ${result.error.message}`, 'error');
+                    return;
+                  }
+                  toast(`Exported ${result.data.events} events to ${result.data.path}`, 'success');
+                })();
+              }}
             >
-              Export log (simulated)
+              {live ? 'Export log' : 'Export log (simulated)'}
             </Button>
           </>
         }
@@ -251,11 +322,19 @@ export default function Activity() {
             {filtered.length === 0 ? (
               <EmptyState
                 icon={<Filter />}
-                title={`No ${filter === 'all' ? 'matching ' : `${filter} `}events`}
+                title={
+                  live && loading
+                    ? 'Reading the local database'
+                    : `No ${filter === 'all' ? 'matching ' : `${filter} `}events`
+                }
                 description={
-                  search.trim()
-                    ? `Nothing in this filter matches "${search.trim()}". Try a different search or clear the filters.`
-                    : 'The mock dataset has no events of this kind. Try another filter.'
+                  live
+                    ? loading
+                      ? 'The activity table is being read.'
+                      : 'The database has no activity yet. Load a model or send a message and come back.'
+                    : search.trim()
+                      ? `Nothing in this filter matches "${search.trim()}". Try a different search or clear the filters.`
+                      : 'The mock dataset has no events of this kind. Try another filter.'
                 }
                 action={
                   filtersActive ? (
@@ -353,7 +432,7 @@ export default function Activity() {
                                     Agent: <span className="text-ink-secondary">{agent.name}</span> · role: {agent.role}
                                   </p>
                                 )}
-                                <p className="label mt-3">Simulated log record</p>
+                                <p className="label mt-3">{live ? 'Stored log record' : 'Simulated log record'}</p>
                                 <pre className="overflow-x-auto rounded-md border border-surface-line bg-surface-raised p-3 text-2xs leading-relaxed text-ink-secondary">
                                   <code>{JSON.stringify({ id: e.id, ts: e.ts, kind: e.kind, status: e.status }, null, 2)}</code>
                                 </pre>
@@ -366,7 +445,9 @@ export default function Activity() {
                                       Reject
                                     </Button>
                                     <span className="text-2xs text-ink-faint">
-                                      Decision updates this screen only — no action is performed.
+                                      {live
+                                        ? 'No approval command is implemented in this build; the buttons will report that and change nothing.'
+                                        : 'Decision updates this screen only — no action is performed.'}
                                     </span>
                                   </div>
                                 )}

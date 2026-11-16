@@ -98,7 +98,11 @@ export default function Chat() {
   // Handle ?new=1 from quick actions
   useEffect(() => {
     if (searchParams.get('new') === '1') {
-      const conv = newConversation(live ? activeModel?.id ?? '' : activeModelId, 'universal');
+      if (live) {
+        void createConversation();
+        return;
+      }
+      const conv = newConversation(activeModelId, 'universal');
       setConversations((prev) => [conv, ...prev]);
       navigate(`/chat/${conv.id}`, { replace: true });
     }
@@ -110,26 +114,37 @@ export default function Chat() {
     if (!live) return;
     let cancelled = false;
     void (async () => {
-      const listed = await transport.call('model.list', { installedOnly: true, limit: 100 });
+      const [listed, settings] = await Promise.all([
+        transport.call('model.list', { installedOnly: true, limit: 100 }),
+        transport.call('settings.get'),
+      ]);
       if (cancelled) return;
       if (!listed.ok) {
         setCoreError(`${listed.error.code}: ${listed.error.message}`);
         return;
       }
       setModels(listed.data.items);
-      const remembered = localStorage.getItem('nexus.activeModelId');
+      const stored = settings.ok ? settings.data.sections.models?.active : undefined;
+      const remembered = typeof stored === 'string' ? stored : localStorage.getItem('nexus.activeModelId');
       const chosen =
         listed.data.items.find((m) => m.id === remembered) ?? listed.data.items[0] ?? null;
       setActiveModel(chosen);
       if (chosen) {
         localStorage.setItem('nexus.activeModelId', chosen.id);
         setActiveModelId(chosen.id);
-        setConversations((prev) =>
-          prev.length === 0
-            ? [newConversation(chosen.id, 'universal')]
-            : prev.map((c) => (c.modelId ? c : { ...c, modelId: chosen.id })),
-        );
       }
+      // Conversations come from the local database, not a fresh mock list.
+      const summaries = await transport.call('chat.list', { limit: 100 });
+      if (cancelled) return;
+      if (!summaries.ok) {
+        setCoreError(`${summaries.error.code}: ${summaries.error.message}`);
+        return;
+      }
+      const loaded = await Promise.all(
+        summaries.data.items.map((s) => transport.call('chat.get', { id: s.id })),
+      );
+      if (cancelled) return;
+      setConversations(loaded.flatMap((r) => (r.ok ? [r.data as Conversation] : [])));
       // The advertised window is not the window we run: the core caps it by measurement.
       const status = await transport.call('engine.status');
       if (!cancelled && status.ok && status.data.running && status.data.contextCap) {
@@ -348,6 +363,8 @@ export default function Chat() {
       conversationId: conversation.id,
       content,
       clientId: messageId,
+      attachments: attachments.length ? attachments : undefined,
+      agentId: conversation.agentId,
     });
     if (!sent.ok) {
       setThinking(false);
@@ -395,7 +412,7 @@ export default function Chat() {
   const regenerate = () => {
     if (!active) return;
     if (live) {
-      toast('Regenerate is not implemented in this build (chat.regenerate lands with M2).', 'info');
+      toast('Regenerate is not implemented in this build.', 'info');
       return;
     }
     const lastUser = [...active.messages].reverse().find((m) => m.role === 'user');
@@ -446,16 +463,58 @@ export default function Chat() {
     );
   };
 
-  const createConversation = () => {
-    const conv = newConversation(live ? activeModel?.id ?? '' : activeModelId, 'universal');
+  async function createConversation() {
+    if (!live) {
+      const conv = newConversation(activeModelId, 'universal');
+      setConversations((prev) => [conv, ...prev]);
+      navigate(`/chat/${conv.id}`);
+      return;
+    }
+    if (!activeModel) {
+      toast('Install a model before starting a conversation.', 'warning');
+      return;
+    }
+    const created = await transport.call('chat.create', {
+      agentId: 'universal',
+      modelId: activeModel.id,
+    });
+    if (!created.ok) {
+      toast(`${created.error.code}: ${created.error.message}`, 'error');
+      return;
+    }
+    const conv = created.data as Conversation;
     setConversations((prev) => [conv, ...prev]);
     navigate(`/chat/${conv.id}`);
-  };
+  }
 
-  const deleteConversation = (id: string) => {
+  const deleteConversation = async (id: string) => {
+    if (live) {
+      const result = await transport.call('chat.delete', { id });
+      if (!result.ok) {
+        toast(`${result.error.code}: ${result.error.message}`, 'error');
+        return;
+      }
+    }
     setConversations((prev) => prev.filter((c) => c.id !== id));
     if (active?.id === id) navigate('/chat');
-    toast('Conversation removed from prototype state', 'success');
+    toast(
+      live ? 'Conversation deleted from the local database' : 'Conversation removed from this browser session',
+      'success',
+    );
+  };
+
+  const togglePin = async (conversation: Conversation) => {
+    if (live) {
+      const result = await transport.call('chat.setPinned', {
+        id: conversation.id,
+        pinned: !conversation.pinned,
+      });
+      if (!result.ok) {
+        toast(`${result.error.code}: ${result.error.message}`, 'error');
+        return;
+      }
+    }
+    update((prev) => prev.map((x) => (x.id === conversation.id ? { ...x, pinned: !x.pinned } : x)));
   };
 
   /* ------------------------------------------------------------------ */
@@ -478,7 +537,7 @@ export default function Chat() {
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
           {filtered.length === 0 ? (
-            <EmptyState title="No matches" description="No conversation contains that text." className="py-8" />
+            <EmptyState title={search.trim() ? 'No matches' : 'No conversations yet'} description={search.trim() ? 'No conversation contains that text.' : live ? 'Start one with New conversation; it is saved to this machine.' : 'Start one with New conversation.'} className="py-8" />
           ) : (
             filtered.map((c) => (
               <button
@@ -524,10 +583,9 @@ export default function Chat() {
                       {
                         id: 'pin',
                         label: c.pinned ? 'Unpin' : 'Pin',
-                        onSelect: () =>
-                          update((prev) => prev.map((x) => (x.id === c.id ? { ...x, pinned: !x.pinned } : x))),
+                        onSelect: () => void togglePin(c),
                       },
-                      { id: 'del', label: 'Delete', danger: true, icon: <Trash2 />, onSelect: () => deleteConversation(c.id) },
+                      { id: 'del', label: 'Delete', danger: true, icon: <Trash2 />, onSelect: () => void deleteConversation(c.id) },
                     ] satisfies MenuItem[]
                   }
                 />
@@ -591,7 +649,10 @@ export default function Chat() {
                   aria-label="Agent for this conversation"
                   className="h-8 w-[150px] text-xs"
                   value={active.agentId}
-                  onChange={(e) => mutateActive((c) => ({ ...c, agentId: e.target.value }))}
+                  onChange={(e) => {
+                    mutateActive((c) => ({ ...c, agentId: e.target.value }));
+                    if (live) toast('Agent changes apply to this window only; the store keeps the recorded agent.', 'info');
+                  }}
                   options={MOCK_AGENTS.map((a) => ({ value: a.id, label: a.name.replace(' NEXUS ', ' ') }))}
                 />
                 <Tooltip content="Conversation settings" side="bottom">
@@ -783,7 +844,7 @@ export default function Chat() {
                 <KeyValue k="Model" v={displayModel} />
                 <KeyValue k="Messages" v={String(active.messages.length)} mono />
                 <KeyValue k="Updated" v={timeAgo(new Date(active.updatedAt))} />
-                {live && <KeyValue k="History sent" v="latest turn only" />}
+                {live && <KeyValue k="History sent" v="whole conversation, trimmed to the window" />}
               </div>
             </ContextPanelCard>
             <ContextPanelCard title="Agents in this chat">
@@ -815,9 +876,24 @@ export default function Chat() {
               variant="primary"
               disabled={!renameValue.trim()}
               onClick={() => {
-                update((prev) => prev.map((c) => (c.id === renaming ? { ...c, title: renameValue.trim() } : c)));
-                setRenaming(null);
-                toast('Conversation renamed', 'success');
+                void (async () => {
+                  const id = renaming;
+                  const title = renameValue.trim();
+                  if (!id || !title) return;
+                  if (live) {
+                    const result = await transport.call('chat.rename', { id, title });
+                    if (!result.ok) {
+                      toast(`${result.error.code}: ${result.error.message}`, 'error');
+                      return;
+                    }
+                  }
+                  update((prev) => prev.map((c) => (c.id === id ? { ...c, title } : c)));
+                  setRenaming(null);
+                  toast(
+                    live ? 'Conversation renamed in the local database' : 'Conversation renamed in this browser session',
+                    'success',
+                  );
+                })();
               }}
             >
               Save
@@ -829,7 +905,7 @@ export default function Chat() {
       </Modal>
 
       {/* Settings dialog */}
-      <Modal open={settingsOpen} onClose={() => setSettingsOpen(false)} title="Conversation settings" subtitle="Prototype controls — they do not affect a real model">
+      <Modal open={settingsOpen} onClose={() => setSettingsOpen(false)} title="Conversation settings" subtitle={live ? 'Temperature and system prompt are not wired to the engine in this build.' : 'Prototype controls — they do not affect a real model'}>
         {active && (
           <div className="space-y-4">
             <Input label="Temperature (simulated)" type="number" min={0} max={2} step={0.1} defaultValue={0.7} hint="Stored in frontend state only." />
@@ -854,17 +930,29 @@ export default function Chat() {
         title="Clear this conversation?"
         message={
           <>
-            All {active?.messages.length ?? 0} messages in <strong>{active?.title}</strong> will be removed from
-            prototype state. This cannot be undone (simulated).
+            All {active?.messages.length ?? 0} messages in <strong>{active?.title}</strong> will be removed
+            {live ? ' from the local database' : ' from this browser session'}. This cannot be undone.
           </>
         }
         confirmLabel="Clear messages"
         danger
         onCancel={() => setClearConfirm(false)}
         onConfirm={() => {
-          mutateActive((c) => ({ ...c, messages: [], updatedAt: new Date().toISOString() }));
-          setClearConfirm(false);
-          toast('Conversation cleared (frontend state only)', 'success');
+          void (async () => {
+            if (live && active) {
+              const result = await transport.call('chat.clearMessages', { id: active.id });
+              if (!result.ok) {
+                toast(`${result.error.code}: ${result.error.message}`, 'error');
+                return;
+              }
+            }
+            mutateActive((c) => ({ ...c, messages: [], updatedAt: new Date().toISOString() }));
+            setClearConfirm(false);
+            toast(
+              live ? 'Conversation cleared in the local database' : 'Conversation cleared in this browser session',
+              'success',
+            );
+          })();
         }}
       />
     </div>

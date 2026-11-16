@@ -467,5 +467,5 @@ replacement, which keeps old builds honest rather than broken.
 It does not decide the Rust crate layout, the SQLite schema (see `PHASE2_DATA_MODEL.md`), or the
 sidecar's exact CLI flags (see `PHASE2_SIDECAR_SPEC.md`). It also does not mean any command exists
 yet: **nothing here is implemented**. `src/contract/client.ts` is the code version of that sentence —
-until a core is attached, its transport answers all 96 commands with `not_implemented` and delivers no
+until a core is attached, its transport answers all 97 commands with `not_implemented` and delivers no
 event at all, which is what this section always promised.

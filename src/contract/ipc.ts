@@ -240,6 +240,8 @@ export interface ChatSendInput {
   attachments?: Attachment[];
   /** UI-generated UUID so a retried invoke cannot duplicate the message. */
   clientId?: string;
+  /** Agent to record when `chat.send` has to create a conversation the store has not seen. */
+  agentId?: string;
 }
 
 export interface ChatRegenerateInput {
@@ -525,6 +527,16 @@ export interface BackupResult {
   verified: boolean;
 }
 
+export interface BackupRecord {
+  id: string;
+  name: string;
+  path: string;
+  sizeBytes: number;
+  createdAt: string;
+  schemaVersion: number;
+  verified: boolean;
+}
+
 export interface RestoreResult {
   restoredAt: string;
   previousBackup: string;
@@ -662,8 +674,9 @@ export interface CommandSpecs {
   'system.profile': { args: undefined; res: HardwareProfile };
   'system.pickDirectory': { args: { purpose?: string }; res: { path: string } | null };
   'store.backup': { args: undefined; res: BackupResult };
+  'store.backups': { args: undefined; res: BackupRecord[] };
   'store.restore': { args: { path: string }; res: RestoreResult };
-  'store.export': { args: { path: string; format: ExportFormat }; res: { bytes: number } };
+  'store.export': { args: { path?: string; format: ExportFormat }; res: { bytes: number; path: string } };
   'store.purge': { args: { kind: PurgeKind }; res: PurgeResult };
 }
 

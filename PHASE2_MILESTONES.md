@@ -274,7 +274,7 @@ and the next decision is model size or provider — not more infrastructure.
 
 ---
 
-### M2 — Persistence
+### M2 — Persistence — **DONE 2026-11-17**
 
 **Scope:** SQLite schema from `PHASE2_DATA_MODEL.md`, migrations, WAL, conversations/messages/
 settings/activity tables, backup and restore.
@@ -289,6 +289,13 @@ npx tsc --noEmit                      → exit 0
 ```
 **Honesty swap:** Memory Center, Activity Center and Chat stop saying "nothing persists"; Settings
 → Backup becomes real; the purge and export actions do too.
+
+**Result (2026-11-17):** all five gate lines ran; evidence in `TEST_RESULTS.md` §"2026-11-17 — M2
+persistence" and `tools/m2-gate.mjs`. `cargo test -p nexus-store` 9/0, `cargo test -p nexus-core`
+59/0, clippy clean, `npx tsc --noEmit` exit 0. Restart gate: conversation, settings, `models.active`
+and the painted theme survived a real process kill and relaunch; `store.backup` wrote and verified a
+file, `store.restore` wrote a pre-restore copy and row counts matched (1 to 1). The kill-during-write
+line is the store's child-process test, not an app kill during generation. Tagged `m2-persistence`.
 
 ---
 

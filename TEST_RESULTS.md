@@ -18,6 +18,106 @@ memory, tokens) live in `MEASUREMENTS.md`; this file records pass/fail and the e
 
 ---
 
+## 2026-11-17 — M2 persistence
+
+Worktree `D:\NEXUS-AI-m1`, branch `m2-persistence` (from tagged M1 `7537a9f`). New crate
+`crates/nexus-store` (rusqlite 0.32.1 bundled-full + backup), the store wired into
+`crates/nexus-core/src/dispatch.rs`, and the Chat / Memory / Activity / Settings / Dashboard
+honesty swap. The seed rows this gate created in the real database were deleted afterwards;
+the two backup files it wrote remain in `%APPDATA%\NexusAI\backups`.
+
+### 1. Store tests
+
+```
+> cargo test -p nexus-store
+running 9 tests
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+```
+
+Includes `migrations_apply_from_empty_and_integrity_is_clean`,
+`backup_then_restore_keeps_rows_and_writes_a_pre_restore_copy` and
+`a_killed_writer_leaves_a_clean_database`. Exit code 0.
+
+### 2. Core tests (router level)
+
+```
+> cargo test -p nexus-core
+running 59 tests
+test result: ok. 59 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.60s
+```
+
+New in M2 (examples): `conversations_persist_through_the_router`,
+`a_question_is_saved_even_when_no_model_is_chosen`,
+`settings_are_stored_read_back_and_validated`,
+`backup_refuses_an_in_memory_store_instead_of_writing_a_fake_file`,
+`owner_export_returns_the_path_it_wrote`,
+`a_restart_reads_the_same_conversation_settings_and_active_model` (opens the database file,
+drops the core, reopens it, reads the conversation back). Exit code 0.
+
+### 3. Lints
+
+```
+> cargo clippy --workspace --all-targets -- -D warnings
+    Checking nexus-ai v0.1.0 (D:\NEXUS-AI-m1\src-tauri)
+    Finished `dev` profile [unoptimized] target(s) in 18.83s
+```
+
+Exit code 0.
+
+### 4. Frontend
+
+```
+> npx tsc --noEmit          → exit 0
+> npm run build             → ✓ built in 31.64s
+  dist/assets/index-DNp-owZs.js   446.73 kB │ gzip: 129.88 kB
+  dist/assets/index-DatQnz7P.css   39.87 kB │ gzip:  9.93 kB
+```
+
+### 5. App-level gate: restart, theme, backup → restore
+
+`target/debug/nexus-ai.exe` rebuilt from this branch (`cargo build -p nexus-ai`, 3m 19s),
+Vite 5.4.21 on :5173, WebView2 DevTools on 9333. `tools/m2-gate.mjs` calls the same `ipc`
+command the UI calls. First launch, `node tools/m2-gate.mjs seed`:
+
+```
+PASS  the page reaches the real core — engine.status answered
+PASS  chat.create wrote a conversation — c-1794871137780-0
+PASS  appearance.theme was saved — light
+PASS  models.active was saved — m2-gate-model
+PASS  chat.list reads it back in this run — total 1
+exit=0
+```
+
+App terminated (`taskkill /F /IM nexus-ai.exe`, PID 14296, then no `nexus-ai.exe` in
+`tasklist`), relaunched, `node tools/m2-gate.mjs verify`:
+
+```
+PASS  the page reaches the real core — engine.status answered
+PASS  the conversation survived the restart — total 1
+PASS  settings survived the restart — light
+PASS  the active model survived the restart — m2-gate-model
+PASS  the UI painted the saved theme — html.light
+PASS  store.backup wrote and verified a file — C:\Users\BS\AppData\Roaming\NexusAI\backups\nexus-backup-20261116231941-0.db
+PASS  store.restore replaced the database — pre-restore C:\Users\BS\AppData\Roaming\NexusAI\backups\nexus-backup-20261116231942-3.db
+PASS  row counts are identical after restore — 1 → 1
+exit=0
+```
+
+The evidence file `.m2-gate.json` was written in both phases (gitignored).
+
+**Kill during a write** is covered at the store level by
+`a_killed_writer_leaves_a_clean_database` (§1): the test re-launches its own binary as a child
+process (`--exact tests::crash_writer_child`), the child dies mid-transaction without
+committing, and the reopened file passes `integrity_check` with exactly the one committed row.
+It was **not** reproduced by killing the app process during a live generation in this run.
+
+**Not re-run in this change:** the M1 live chain (`NEXUS_LIVE_ENGINE=1 … live_chat`) and
+`tools/ui-gate.mjs`. The core's engine path was not modified except for the `chat_send`
+restructuring around stored messages and the usage skip; those are covered by §2. The next
+claimed engine/stream/stop/crash change must re-run both.
+
+---
+
 ## 2026-11-16 — Post-M1 hardening (Chat honesty refinements)
 
 Worktree `D:\NEXUS-AI-m1` at `daac7ee` plus the four `src/pages/Chat.tsx` refinements below.

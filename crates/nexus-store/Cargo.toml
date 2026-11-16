@@ -1,0 +1,20 @@
+[package]
+name = "nexus-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "NEXUS AI local SQLite store: schema, migrations, WAL, conversations, settings, activity, backup and restore (Phase 2, M2)"
+
+[dependencies]
+# The data model names rusqlite + bundled SQLite explicitly (PHASE2_DATA_MODEL.md §1).
+# `bundled-full` is the flag set that carries FTS5, which the schema needs for
+# fts_message / fts_memory / fts_chunk. `backup` is the online-copy API used by
+# store.restore, so the live connection never has to be closed and file-copied over.
+rusqlite = { version = "0.32", features = ["bundled-full", "backup"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lib]
+name = "nexus_store"
+path = "src/lib.rs"

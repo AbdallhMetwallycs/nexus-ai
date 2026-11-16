@@ -48,7 +48,7 @@ function SystemCard({
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { online } = usePlatform();
+  const { online, live } = usePlatform();
   const activeModel = useActiveModel();
   const [tick, setTick] = useState(0);
   const telemetry = useMemo(() => mockTelemetry(tick), [tick]);
@@ -79,7 +79,9 @@ export default function Dashboard() {
               <KeyValue k="On disk" v={formatBytes(activeModel.sizeGB)} mono />
             </div>
             <p className="mt-2 text-2xs leading-relaxed text-ink-faint">
-              Selection is simulated — no model weights are loaded in Phase 1.
+              {live
+                ? 'Metadata comes from the GGUF on disk. The context window shown is the model’s advertised value; the engine loads the capped window measured for this machine.'
+                : 'Selection is simulated — no model weights are loaded in Phase 1.'}
             </p>
             <Button size="xs" variant="ghost" className="mt-2 px-0" onClick={() => navigate('/models')}>
               Change in Model Manager <ArrowRight size={12} />
@@ -147,8 +149,10 @@ export default function Dashboard() {
                 <h2 className="text-xl font-bold tracking-tight">Good to see you, Abdallh.</h2>
               </div>
               <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-ink-muted">
-                NEXUS is ready in <strong className="text-ink-secondary">offline mode</strong>. Everything below is
-                prototype data until Phase 2 connects the engine.
+                NEXUS is ready in <strong className="text-ink-secondary">offline mode</strong>.{' '}
+                {live
+                  ? 'Chat and Model Manager talk to the real local engine and database; the summary cards on this page still render the Phase 1 mock dataset.'
+                  : 'Everything below is prototype data — no engine is attached in this browser build.'}
               </p>
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Badge tone={online ? 'ok' : 'info'} dot pulse={online}>

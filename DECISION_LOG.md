@@ -312,6 +312,35 @@ beats churn. A proven, gated implementation is not replaced by an unproven dupli
 the duplicate is newer in the session, and a second implementation of the same seam is how contract
 drift starts.
 
+**D-039 — Persistence uses `rusqlite` with bundled SQLite, fetched from crates.io.** The store is
+SQLite because the schema in `PHASE2_DATA_MODEL.md` needs transactions, WAL and FTS5, all of which
+ship with SQLite itself; re-implementing them on files would be a second database. `rusqlite 0.32.1`
+with the `bundled-full` and `backup` features compiles SQLite into the app, so no system DLL is
+assumed and the online-backup API is available for `store.backup`/`store.restore`. The crates come
+from crates.io, which is a development-time fetch recorded here per `AGENTS.md` rule 4; at runtime
+nothing is downloaded and no network call is made.
+
+**D-040 — `store.backups` is added to the contract (96 → 97 commands) so Settings can list files
+that exist.** The contract already had backup/restore/export/purge but no listing command; a Backup
+screen without one would have to invent rows, which is exactly the Phase 1 mock the milestone
+replaces. The command returns the `backup_record` rows (id, name, path, size, createdAt,
+schemaVersion, verified) and both `src/contract/ipc.ts` and `dispatch.rs` changed in the same edit.
+`store.export` now also returns the path it wrote, because a toast that says "exported" without
+saying where is not useful.
+
+**D-041 — `chat.send` saves the question before any model-dependent refusal, and adopts the id the
+UI already named.** M1 let the renderer own the id; a first send to a conversation the UI created
+before the model check could either fork a second row or lose the turn on a `model.not_installed`
+refusal. Now the message is appended first, then the model is resolved, so a restart shows the same
+question beside the same error; `create_conversation_with_id` keeps the UI's id instead of
+allocating a new one.
+
+**D-042 — `models.active` and `appearance.theme` live in the `settings` table; localStorage is only
+a pre-paint hint.** The M1 build remembered both in `localStorage`. The database is the record of
+the owner's choice, so `Core::from_env` restores the active model when the registry can resolve it,
+`ThemeProvider` reads `appearance.theme` on mount, and both write through `settings.patch`. If the
+read fails, the current value stays and nothing is claimed to have loaded.
+
 ## Deferred (explicitly not in Phase 1)
 
 LLM runtime (Ollama/llama.cpp), backend/API, databases, persistent memory,

@@ -7,6 +7,7 @@ publish.workspace = true
 description = "NEXUS AI engine supervisor, model registry, RAM admission and inference client (Phase 2, M1)"
 
 [dependencies]
+nexus-store = { path = "../nexus-store" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

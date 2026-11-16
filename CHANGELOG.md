@@ -6,6 +6,29 @@ evidence document named.
 
 ## [Unreleased]
 
+### Added — M2 persistence (2026-11-17)
+
+- **`crates/nexus-store`**: SQLite (rusqlite 0.32.1, bundled-full + backup) with WAL,
+  `foreign_keys=ON`, `busy_timeout` 5000 ms, `PRAGMA user_version` migrations, FTS5 tables, and
+  verified backup / guarded restore. Nine tests cover empty-db migration, `integrity_check`,
+  backup to restore with identical row counts plus a pre-restore copy, and a child process killed
+  mid-transaction.
+- **Core router**: `chat.*` (send/list/get/create/rename/setPinned/delete/clearMessages/usage),
+  `settings.get|patch`, `activity.list|get|export|purge`, `memory.list|get|update|approve|reject|`
+  `approveAllPending|delete|history`, and `store.backup|backups|restore|export|purge` now read and
+  write the database. `chat.send` assembles stored history, trims it to the measured budget, saves
+  the question before any model refusal, and emits no usage frame for a stopped stream.
+- **`store.backups` added to the contract** (96 to 97 commands; `store.export` now returns its path).
+- **App data** lives at `%APPDATA%/NexusAI/nexus.db` (override `NEXUS_DATA_DIR`); the active
+  model and theme are restored from the `settings` table at startup.
+- **Screens**: Chat reads conversations at mount and writes every send/rename/pin/delete/clear;
+  Memory Center reads, edits, approves, rejects, archives and shows history from the store;
+  Activity Center reads the recorded timeline and exports it; Settings saves sections to the
+  database, lists and creates real verified backups, restores them, exports owner data, and purges
+  short-term memory. Demo notices now appear only in the browser build.
+- **`tools/m2-gate.mjs`**: seed/verify over CDP — restart survival, painted theme, verified backup,
+  restore and row-count comparison. Evidence in `TEST_RESULTS.md` (2026-11-17).
+
 ### Fixed
 
 - **Chat showed two waiting indicators, and an attachment-only send was refused.** In live mode the

@@ -8,15 +8,15 @@ product terms, not as a severity score. Anything that was never measured says `n
 | --- | --- | --- | --- |
 | KI-1 | No Content-Security-Policy in the WebView | Defence-in-depth gap | None |
 | KI-2 | No installer, signing, notarization or updater | Cannot install or distribute | Run from source |
-| KI-3 | Conversation state is in memory | Chats lost on exit | None |
-| KI-4 | Only the current turn is sent to the engine | No real multi-turn context | Restate context |
+| KI-3 | Conversation state is in memory | **Resolved 2026-11-17 (M2)** — conversations and messages are stored in SQLite | — |
+| KI-4 | Only the current turn is sent to the engine | **Resolved 2026-11-17 (M2)** — stored history is assembled and trimmed by budget | — |
 | KI-5 | Context rail estimates before a usage frame | Number changes when the answer completes | Wait for completion |
 | KI-6 | Crash report is reactive, and the partial answer is replaced | No background alert; streamed text lost | Send again |
 | KI-7 | One engine instance; a model switch is a full reload | Switch costs 6–10 s warm / 38 s cold | Keep one model |
 | KI-8 | First load is tens of seconds; Stop is disabled while loading | First prompt feels stuck | Wait |
 | KI-9 | No regenerate | No retry-without-retype | Edit and resend |
 | KI-10 | Google Fonts link contradicted the "0 external requests" gate result | **Resolved 2026-11-14** — fonts vendored, no external URL remains | — |
-| KI-11 | Dashboard still shows Phase 1 copy in live mode | Claims 0 models while a real model is listed | Read Model Manager |
+| KI-11 | Dashboard still shows Phase 1 copy in live mode | **Resolved 2026-11-17 (M2)** — welcome and model-card copy switch on the transport | — |
 | KI-12 | Evidence covers one model, one hardware profile, one run per step | Behaviour on other machines is `not recorded` | None |
 
 ## KI-1 — No CSP in the WebView
@@ -40,36 +40,31 @@ Windows would not treat it as a trusted publisher.
 **Workaround:** `npm run tauri dev` from the repo (`RELEASE_NOTES.md`).
 **Target:** M6 (packaging and hardening).
 
-## KI-3 — Conversation state is in memory
+## KI-3 — Conversation state is in memory — resolved in M2
 
-`Chat.tsx` owns the conversation list and messages in React state. The core has no
-conversation table; `chat.list`, `chat.get`, `chat.create`, `chat.rename`, `chat.setPinned`,
-`chat.delete` and `chat.clearMessages` all return `not_implemented`. Only the active model id
-and theme persist in `localStorage` (`DATA_AND_BACKUP_STRATEGY.md` §1).
+The M1 build kept the conversation list and messages in `Chat.tsx` state. Since 2026-11-17
+`chat.list/get/create/rename/setPinned/delete/clearMessages` are matched in the core and backed
+by the `conversations` / `message` tables; the Chat screen reads them at mount. Evidence:
+`TEST_RESULTS.md` §"2026-11-17 — M2 persistence" (§2 unit tests and §5 restart gate).
+**Tracked as:** TD-9 (closed).
 
-**Impact:** closing the app loses every conversation; the UI gate always starts from an empty
-chat.
-**Workaround:** none. Copy text you need before closing.
-**Target:** M2. **Tracked as:** TD-9.
+## KI-4 — Only the current turn is sent to the engine — resolved in M2
 
-## KI-4 — Only the current turn is sent to the engine
-
-`chat.send` builds the request from `SYSTEM_PROMPT` plus the current user message
-(`dispatch.rs`, `chat.send`). Earlier messages remain visible in the UI but are not part of the
-prompt. `trim_to_budget` exists in `inference.rs`, but it is only fed those two turns.
-
-**Impact:** a follow-up question cannot rely on the previous answer; the model may repeat
-itself or contradict what is on screen.
-**Workaround:** restate the needed context in each prompt.
-**Tracked as:** TD-10.
+Since 2026-11-17 `chat.send` loads the stored messages of the conversation, prepends the system
+prompt and sends every user/assistant turn, trimmed to the measured context budget minus the
+answer allowance. A long conversation therefore loses its oldest turns first, which is the
+documented behaviour of `trim_to_budget`, not a silent truncation of the newest question.
+**Tracked as:** TD-10 (closed).
 
 ## KI-5 — The context rail estimates until the usage frame arrives
 
 Before an answer completes, `Chat.tsx` computes `estimatedTokens` as total message characters
 divided by 4. `contextMax` comes from the last usage frame, then the last `engine.loadModel`
 result, then the model's advertised window. The rail title says "(estimated)" and the copy says
-the engine reports exact tokens when an answer completes. `chat.usage` is not implemented, so
-the only measured number is the `chat://usage` event emitted after generation.
+the engine reports exact tokens when an answer completes. Since M2 `chat.usage` is implemented
+(it returns `measured: true` only when a stored usage row exists, otherwise an estimate), but
+the Chat screen still derives the number from its own stream events rather than calling it. A
+stopped stream stores no usage and emits no frame.
 
 **Impact:** the displayed count can move when the answer completes; before any load, the rail
 can show the model's advertised 131,072-token window while the numerator is a character

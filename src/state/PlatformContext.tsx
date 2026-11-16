@@ -43,14 +43,21 @@ export function PlatformProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!live) return;
     let cancelled = false;
-    void transport.call('model.list', { installedOnly: true, limit: 100 }).then((result) => {
-      if (cancelled || !result.ok) return;
-      setCoreModels(result.data.items);
-      const remembered = localStorage.getItem('nexus.activeModelId');
+    void (async () => {
+      const [listed, settings] = await Promise.all([
+        transport.call('model.list', { installedOnly: true, limit: 100 }),
+        transport.call('settings.get'),
+      ]);
+      if (cancelled || !listed.ok) return;
+      setCoreModels(listed.data.items);
+      // The database is the record of the owner's choice; localStorage is only the hint
+      // written before the database was opened.
+      const stored = settings.ok ? settings.data.sections.models?.active : undefined;
+      const remembered = typeof stored === 'string' ? stored : localStorage.getItem('nexus.activeModelId');
       const chosen =
-        result.data.items.find((m) => m.id === remembered) ?? result.data.items[0] ?? null;
+        listed.data.items.find((m) => m.id === remembered) ?? listed.data.items[0] ?? null;
       if (chosen) setActiveModelId(chosen.id);
-    });
+    })();
     return () => {
       cancelled = true;
     };

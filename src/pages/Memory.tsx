@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Check,
   CheckCheck,
@@ -31,6 +31,8 @@ import {
   type Tone,
 } from '../components/ui';
 import { ContextPanelCard, KeyValue, PageHeader, WorkArea } from '../components/common/PageChrome';
+import type { MemoryRecord as CoreMemoryRecord } from '../contract/ipc';
+import { resolveTransport } from '../contract/client';
 import { MEMORY_TIER_LABELS, MOCK_MEMORIES } from '../data/memory';
 import type { Approval, MemoryRecord, MemoryTier } from '../data/types';
 import { clockTime, timeAgo } from '../lib/utils';
@@ -69,15 +71,69 @@ const nowIso = () => new Date().toISOString();
 
 export default function Memory() {
   const { toast } = useToast();
-  const [memories, setMemories] = useState<MemoryRecord[]>(MOCK_MEMORIES);
+  const transport = useMemo(() => resolveTransport(), []);
+  const live = transport.kind === 'tauri';
+  const [memories, setMemories] = useState<MemoryRecord[]>(live ? [] : MOCK_MEMORIES);
   const [tab, setTab] = useState<MemoryTier>('short');
   const [search, setSearch] = useState('');
   const [editId, setEditId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editContent, setEditContent] = useState('');
   const [historyId, setHistoryId] = useState<string | null>(null);
+  const [historyOverride, setHistoryOverride] = useState<MemoryRecord | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [approveAllOpen, setApproveAllOpen] = useState(false);
+
+  const asPageRecord = (r: CoreMemoryRecord): MemoryRecord => ({
+    id: r.id,
+    tier: r.tier as MemoryTier,
+    title: r.title,
+    content: r.content,
+    source: r.source,
+    tags: r.tags,
+    approval: r.approval as Approval,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+    history: r.history,
+  });
+
+  const loadMemories = useCallback(async () => {
+    const listed = await transport.call('memory.list', { limit: 500 });
+    if (!listed.ok) {
+      toast(`${listed.error.code}: ${listed.error.message}`, 'error');
+      return;
+    }
+    setMemories(listed.data.items.map(asPageRecord));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transport, toast]);
+
+  useEffect(() => {
+    if (!live) return;
+    void loadMemories();
+  }, [live, loadMemories]);
+
+  // The history modal reads the recorded timeline, not a copy taken at page load.
+  useEffect(() => {
+    if (!live || !historyId) {
+      setHistoryOverride(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const [record, history] = await Promise.all([
+        transport.call('memory.get', { id: historyId }),
+        transport.call('memory.history', { id: historyId }),
+      ]);
+      if (cancelled) return;
+      if (record.ok && history.ok) {
+        setHistoryOverride({ ...asPageRecord(record.data), history: history.data });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live, historyId, transport]);
 
   const q = search.trim().toLowerCase();
   const tierRows = useMemo(
@@ -95,7 +151,9 @@ export default function Memory() {
   );
 
   const pendingCount = memories.filter((r) => r.approval === 'pending').length;
-  const historyRecord = historyId ? memories.find((r) => r.id === historyId) ?? null : null;
+  const historyRecord = historyId
+    ? historyOverride ?? memories.find((r) => r.id === historyId) ?? null
+    : null;
   const deleteRecord = deleteId ? memories.find((r) => r.id === deleteId) ?? null : null;
 
   const patch = (id: string, fn: (r: MemoryRecord) => MemoryRecord) =>
@@ -107,20 +165,57 @@ export default function Memory() {
     setEditContent(r.content);
   };
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!editId || !editTitle.trim() || !editContent.trim()) return;
+    if (live) {
+      const updated = await transport.call('memory.update', {
+        id: editId,
+        patch: { title: editTitle.trim(), content: editContent.trim() },
+      });
+      if (!updated.ok) {
+        toast(`${updated.error.code}: ${updated.error.message}`, 'error');
+        return;
+      }
+      const record = asPageRecord(updated.data);
+      setMemories((prev) => prev.map((r) => (r.id === record.id ? record : r)));
+      setEditId(null);
+      toast('Memory updated in the local database', 'success');
+      return;
+    }
     patch(editId, (r) => ({
       ...r,
       title: editTitle.trim(),
       content: editContent.trim(),
       updatedAt: nowIso(),
-      history: [...r.history, { ts: nowIso(), action: 'edited', detail: 'Edited in Memory Center (prototype action).' }],
+      history: [...r.history, { ts: nowIso(), action: 'edited', detail: 'Edited in Memory Center (this browser session only).' }],
     }));
     setEditId(null);
-    toast('Memory updated (prototype only)', 'success');
+    toast('Memory updated in this browser session only', 'success');
   };
 
-  const setApproval = (id: string, approval: 'approved' | 'rejected', detail: string) => {
+  const setApproval = async (id: string, approval: 'approved' | 'rejected') => {
+    if (live) {
+      const result = await transport.call(
+        approval === 'approved' ? 'memory.approve' : 'memory.reject',
+        { id },
+      );
+      if (!result.ok) {
+        toast(`${result.error.code}: ${result.error.message}`, 'error');
+        return;
+      }
+      const fresh = await transport.call('memory.get', { id });
+      if (fresh.ok) {
+        const record = asPageRecord(fresh.data);
+        setMemories((prev) => prev.map((r) => (r.id === record.id ? record : r)));
+        setHistoryOverride((prev) => (prev?.id === record.id ? record : prev));
+      }
+      toast(
+        approval === 'approved' ? 'Memory approved in the local database' : 'Memory rejected in the local database',
+        approval === 'approved' ? 'success' : 'info',
+      );
+      return;
+    }
+    const detail = approval === 'approved' ? 'Approved via row menu (this browser session only).' : 'Rejected via row menu (this browser session only).';
     patch(id, (r) => ({
       ...r,
       approval,
@@ -128,12 +223,23 @@ export default function Memory() {
       history: [...r.history, { ts: nowIso(), action: approval, detail }],
     }));
     toast(
-      approval === 'approved' ? 'Memory approved (prototype state only)' : 'Memory rejected (prototype state only)',
+      approval === 'approved' ? 'Memory approved in this browser session only' : 'Memory rejected in this browser session only',
       approval === 'approved' ? 'success' : 'info',
     );
   };
 
-  const approveAll = () => {
+  const approveAll = async () => {
+    if (live) {
+      const result = await transport.call('memory.approveAllPending');
+      setApproveAllOpen(false);
+      if (!result.ok) {
+        toast(`${result.error.code}: ${result.error.message}`, 'error');
+        return;
+      }
+      await loadMemories();
+      toast(`${result.data.approved} pending memories approved in the local database`, 'success');
+      return;
+    }
     const ts = nowIso();
     setMemories((prev) =>
       prev.map((r) =>
@@ -142,20 +248,32 @@ export default function Memory() {
               ...r,
               approval: 'approved',
               updatedAt: ts,
-              history: [...r.history, { ts, action: 'approved', detail: 'Bulk-approved from Memory Center header.' }],
+              history: [...r.history, { ts, action: 'approved', detail: 'Bulk-approved from Memory Center header (this browser session only).' }],
             }
           : r,
       ),
     );
     setApproveAllOpen(false);
-    toast(`${pendingCount} pending memories approved (prototype only)`, 'success');
+    toast(`${pendingCount} pending memories approved in this browser session only`, 'success');
   };
 
-  const removeRecord = () => {
+  const removeRecord = async () => {
     if (!deleteRecord) return;
-    setMemories((prev) => prev.filter((r) => r.id !== deleteRecord.id));
+    const id = deleteRecord.id;
+    if (live) {
+      const result = await transport.call('memory.delete', { id });
+      if (!result.ok) {
+        toast(`${result.error.code}: ${result.error.message}`, 'error');
+        return;
+      }
+      setMemories((prev) => prev.filter((r) => r.id !== id));
+      setDeleteId(null);
+      toast('Memory archived in the local database', 'success');
+      return;
+    }
+    setMemories((prev) => prev.filter((r) => r.id !== id));
     setDeleteId(null);
-    toast('Memory deleted from prototype state — nothing persists anyway', 'info');
+    toast('Memory removed from this browser session only', 'info');
   };
 
   const editInvalid = editId !== null && (!editTitle.trim() || !editContent.trim());
@@ -164,8 +282,8 @@ export default function Memory() {
     { id: 'edit', label: 'Edit', icon: <Pencil />, onSelect: () => openEdit(r) },
     ...(r.approval === 'pending'
       ? ([
-          { id: 'approve', label: 'Approve', icon: <Check />, onSelect: () => setApproval(r.id, 'approved', 'Approved via row menu (prototype action).') },
-          { id: 'reject', label: 'Reject', icon: <X />, onSelect: () => setApproval(r.id, 'rejected', 'Rejected via row menu (prototype action).') },
+          { id: 'approve', label: 'Approve', icon: <Check />, onSelect: () => void setApproval(r.id, 'approved') },
+          { id: 'reject', label: 'Reject', icon: <X />, onSelect: () => void setApproval(r.id, 'rejected') },
         ] satisfies MenuItem[])
       : []),
     { id: 'history', label: 'History', icon: <History />, onSelect: () => setHistoryId(r.id) },
@@ -199,8 +317,9 @@ export default function Memory() {
               </Badge>
             </div>
             <p className="mt-3 text-2xs leading-relaxed text-ink-faint">
-              Every record here is fictional demo data. Edits, approvals and deletions live in React state only —
-              nothing persists across restarts in Phase 1.
+              {live
+                ? 'Rows are read from the local database. Approvals, edits and archives survive a restart.'
+                : 'Every record here is fictional demo data. Edits, approvals and deletions live in React state only — nothing persists across restarts in the browser demo.'}
             </p>
           </ContextPanelCard>
 
@@ -219,8 +338,16 @@ export default function Memory() {
     >
       <PageHeader
         title="Memory Center"
-        description="Review, approve, and edit the memories the platform would keep about you. Approvals are prototype actions on mock data."
-        notice={<DemoNotice text="All memories are fictional demo content — this prototype reads and writes React state only." />}
+        description={
+          live
+            ? 'Review, approve, and edit the memories stored on this machine. Every action is written to the local database.'
+            : 'Review, approve, and edit the memories the platform would keep about you. Approvals act on mock data in this browser session.'
+        }
+        notice={
+          live ? undefined : (
+            <DemoNotice text="All memories are fictional demo content — this browser build reads and writes React state only." />
+          )
+        }
         actions={
           <>
             <Tooltip content="Records captured automatically or inferred from chats await your approval" side="bottom">
@@ -268,7 +395,7 @@ export default function Memory() {
         <Card>
           <CardHeader
             title={MEMORY_TIER_LABELS[tab]}
-            subtitle={`${tierRows.length} record${tierRows.length === 1 ? '' : 's'}${q ? ` matching "${search.trim()}"` : ''} · mock dataset`}
+            subtitle={`${tierRows.length} record${tierRows.length === 1 ? '' : 's'}${q ? ` matching "${search.trim()}"` : ''}${live ? ' · local database' : ' · mock dataset'}`}
             actions={<Eye size={14} className="text-ink-faint" />}
           />
           <CardBody className="pt-1">
@@ -279,7 +406,9 @@ export default function Memory() {
                 description={
                   q
                     ? `Nothing in this tier mentions "${search.trim()}" in its title, content, or tags.`
-                    : 'This tier is empty in the mock dataset. Real capture rules arrive with the Phase 2 backend.'
+                    : live
+                      ? 'Nothing has been stored in this tier yet. The M3 memory service is what proposes new rows.'
+                      : 'This tier is empty in the mock dataset. Real capture rules arrive with the M3 memory service.'
                 }
                 action={
                   q ? (
@@ -301,8 +430,8 @@ export default function Memory() {
                             r.approval === 'pending'
                               ? 'Awaiting your approval before the engine would trust it'
                               : r.approval === 'approved'
-                                ? 'Marked trustworthy in this prototype'
-                                : 'Dismissed — would be excluded from recall'
+                                ? 'Marked trustworthy in the local database'
+                                : 'Dismissed — excluded from recall'
                           }
                           side="top"
                         >
@@ -351,7 +480,7 @@ export default function Memory() {
         open={editId !== null}
         onClose={() => setEditId(null)}
         title="Edit memory"
-        subtitle="Prototype edit — saved to React state and recorded in the history timeline"
+        subtitle={live ? 'Saved to the local database and recorded in the history timeline' : 'Browser-session edit — recorded in the in-memory history timeline'}
         footer={
           <>
             <Button variant="ghost" onClick={() => setEditId(null)}>
@@ -387,7 +516,7 @@ export default function Memory() {
         open={historyRecord !== null}
         onClose={() => setHistoryId(null)}
         title={historyRecord ? `History — ${historyRecord.title}` : 'History'}
-        subtitle="Event timeline for this record (mock + prototype actions)"
+        subtitle={live ? 'Recorded event timeline from the local database' : 'Event timeline for this record (browser session)'}
       >
         {historyRecord && (
           <ol className="relative space-y-4 border-l border-surface-line pl-4">
@@ -427,8 +556,8 @@ export default function Memory() {
         message={
           <>
             <strong>{deleteRecord?.title}</strong> ({MEMORY_TIER_LABELS[deleteRecord?.tier ?? 'short']}) will be
-            removed from prototype state along with its {deleteRecord?.history.length ?? 0}-event history. There is no
-            undo — though nothing persists across restarts anyway.
+            {live ? ' archived in the local database' : ' removed from this browser session'} along with its{' '}
+            {deleteRecord?.history.length ?? 0}-event history. There is no undo.
           </>
         }
         confirmLabel="Delete memory"
@@ -444,8 +573,10 @@ export default function Memory() {
         message={
           <>
             All {pendingCount} records marked <Badge tone="warn" dot>pending</Badge> will move to{' '}
-            <Badge tone="ok" dot>approved</Badge> and gain a history event. In Phase 2 this would grant the engine
-            permission to use them; here it only mutates prototype state.
+            <Badge tone="ok" dot>approved</Badge> and gain a history event.{' '}
+            {live
+              ? 'They become eligible for the M3 recall path; today only the approval flag changes.'
+              : 'This browser session only; nothing is written to disk.'}
           </>
         }
         confirmLabel="Approve all"

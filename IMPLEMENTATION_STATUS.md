@@ -1,10 +1,10 @@
 # IMPLEMENTATION_STATUS.md — NEXUS AI
 
-**Status of record for Phase 2 M1 (2026-11-14).** One row per screen. "Backed by" names the
+**Status of record for Phase 2 M2 (2026-11-17).** One row per screen. "Backed by" names the
 IPC command(s) the screen actually calls, verified by reading `src/pages/*.tsx`,
-`src/state/PlatformContext.tsx` and the `match` in `crates/nexus-core/src/dispatch.rs`.
-A command listed in `src/contract/ipc.ts` but not matched in `dispatch.rs` returns
-`not_implemented`; it is not backing.
+`src/state/PlatformContext.tsx`, `src/theme/ThemeContext.tsx` and the `match` in
+`crates/nexus-core/src/dispatch.rs`. A command listed in `src/contract/ipc.ts` but not matched
+in `dispatch.rs` returns `not_implemented`; it is not backing.
 
 Definitions:
 
@@ -15,39 +15,48 @@ Definitions:
 
 | Screen | Status | Backed by | What is real | What is still demo |
 | --- | --- | --- | --- | --- |
-| **Dashboard** | partial | `model.list` (via `PlatformContext` → `useActiveModel`) | The active-model card shows the real registry record (name, quantization, context window, RAM estimate, size) when the Tauri host answered. | Telemetry and sparklines are deterministic mock data; recent conversations/activity/agents are `MOCK_*`; "0 / 10 models installed" and "Selection is simulated" are stale Phase 1 copy in live mode. No `system.telemetry` or `engine.status` call. |
-| **Chat** | real (core path) | `engine.loadModel`, `chat.send`, `chat.stop`, `engine.status`, `model.list`; events `chat://token`, `chat://usage` | A prompt typed into the real composer loads the model through admission, streams real tokens, stops, and reports engine-counted context tokens after the usage frame. Crash and recovery are handled. | Conversation list/create/rename/pin/delete/clear are React state only; there is no `chat.list`/`chat.get`/`chat.create` call. `chat.regenerate` refuses in live mode ("lands with M2"). `chat.usage` is not implemented; usage exists only as the event after an answer completes. The engine receives the system prompt and the current message only — earlier turns stay in the UI but are not sent. |
+| **Dashboard** | partial | `model.list` (via `PlatformContext` → `useActiveModel`) | The active-model card shows the real registry record (name, quantization, context window, RAM estimate, size), and the welcome copy now says so when a core is attached. | Telemetry and sparklines are deterministic mock data; recent conversations/activity/agents are `MOCK_*`. No `system.telemetry` call. |
+| **Chat** | real | `model.list`, `chat.list`, `chat.get`, `chat.create`, `chat.rename`, `chat.setPinned`, `chat.delete`, `chat.clearMessages`, `chat.send`, `chat.stop`, `chat.usage`, `engine.loadModel`, `engine.status`; `settings.get` for the remembered model; events `chat://token`, `chat://usage` | Conversations and every message are written to and read from the local database. A prompt streams real tokens; the assembled prompt includes the stored history, trimmed by the measured budget; `chat.stop` survives model load and stores the partial answer with `stopped = true` and no token counts; crash recovery is unchanged. The usage rail reads `chat.usage` (`measured` true only when a stored usage row exists). | `chat.regenerate` still refuses in live mode. Attachments are stored as sent, not parsed. |
 | **Agents** | demo | none (`agent.*` returns `not_implemented`) | Nothing. Agent definitions are mock records; create/edit/enable/duplicate write React state. | All of it. `DemoNotice`: "no agent process exists in Phase 1." |
-| **Model Manager** | partial | `model.list` (`PlatformContext`), `engine.loadModel`; core also has `model.get`, `model.verify`, `model.remove`, `model.setActive`, `engine.unloadModel`, `engine.measuredFit` | The Installed tab lists real GGUF files read from `NEXUS_MODELS_DIR`, showing real metadata; "Set active" loads the model through measured admission and reports the capped context and thread count; the `active` badge changes only after the load succeeds. | Catalog rows, compatibility verdicts, compare and download are `MOCK_MODELS` behind a `DemoNotice`. The hardware rail is the mock profile. Live catalog rows cannot be made active ("Not on disk — mock catalog row"). |
-| **Memory Center** | demo | none (`memory.*` returns `not_implemented`) | Nothing. Memories, approval actions, search and history are React state over `MOCK_MEMORIES`. | All of it. `DemoNotice`: "this prototype reads and writes React state only." |
+| **Model Manager** | partial | `model.list` (`PlatformContext`), `engine.loadModel`; core also has `model.get`, `model.verify`, `model.remove`, `model.setActive`, `engine.unloadModel`, `engine.measuredFit` | The Installed tab lists real GGUF files read from `NEXUS_MODELS_DIR`; "Set active" loads through measured admission; the loaded model id is saved as `models.active` and restored on the next launch. | Catalog rows, compatibility verdicts, compare and download are `MOCK_MODELS` behind a `DemoNotice`. Live catalog rows cannot be made active. |
+| **Memory Center** | partial | `memory.list`, `memory.get`, `memory.update`, `memory.approve`, `memory.reject`, `memory.approveAllPending`, `memory.delete`, `memory.history` | The list, edit, approve/reject, approve-all, delete (archive) and the history timeline all read and write the `memory` / `memory_history` tables. | Nothing here creates memories yet — M3's capture service is what proposes them, so the live list is empty until then. The status counts still describe only the rows on screen. |
 | **Knowledge Base** | demo | none (`kb.*` returns `not_implemented`) | Nothing. Folder tree, documents, indexing status and search are mock data. | All of it. `DemoNotice`: "No documents are actually parsed or stored." |
 | **Tools & Skills** | demo | none (`tool.*`, `skill.*` return `not_implemented`) | Nothing. Tool status, permissions, enable/disable and the skill builder are React state. | All of it. `DemoNotice`: "no commands are executed." |
-| **Learning Lab** | demo | none (`learning.*` returns `not_implemented`) | Nothing. Corrections, suggestions and instruction versions are mock data. | All of it. `DemoNotice`: "All events, suggestions and version changes are simulated prototype state." |
+| **Learning Lab** | demo | none (`learning.*` return `not_implemented`) | Nothing. Corrections, suggestions and instruction versions are mock data. | All of it. `DemoNotice`: "All events, suggestions and version changes are simulated prototype state." |
 | **Internet Center** | demo | none (`net.*` returns `not_implemented`) | The offline/online flag itself is UI state; no network stack exists. | Permissions, trusted sources, per-agent grants and update history are mock data. `DemoNotice`: "No network stack is wired to this UI." |
-| **Activity Center** | demo | none (`activity.*` returns `not_implemented`) | Nothing. The timeline is an in-memory mock log cleared on reload. | All of it, including the approval queue shown there. |
-| **Settings** | demo | none (`settings.*`, `system.*`, `store.*` return `not_implemented`) | Theme and the active-model id persist in `localStorage`; the rest is React state. | Every settings section, the hardware profile and backup/export actions. `DemoNotice`: "no registry, no config file, no network." |
+| **Activity Center** | real | `activity.list`, `activity.get`, `activity.export` | The timeline is read from the `activity` table the core writes (model loads, sends, stops, backups, restores, purges, exports). Export writes a JSON file and reports its path. | The two pending-approval rows are mock prompts; `activity.*` has no approval decision command, so the buttons say nothing was changed. |
+| **Settings** | partial | `settings.get`, `settings.patch`, `store.backup`, `store.backups`, `store.restore`, `store.export`, `store.purge` | Saving a section writes the values to the `settings` table and the section reloads them on mount; the theme is written as `appearance.theme` and re-applied at startup. Backups are real verified copies listed from `backup_record`; Restore runs the core's guarded restore; "Export my data" writes owner data as JSON; the memory danger zone purges short-tier rows and reports rows/bytes removed. | Models default, Agents config, Internet policy, Learning Lab and Portability remain mock sections behind their own copy. The archive-folder input and the retention window are not wired (the purge uses the store's fixed windows). |
 
 ## Command surface actually implemented
 
-`crates/nexus-core/src/dispatch.rs` matches only these commands; everything else falls through
-to `NexusError::not_implemented` with the contract wording:
+`crates/nexus-core/src/dispatch.rs` matches only these commands (43); everything else falls
+through to `NexusError::not_implemented` with the contract wording:
 
 - `engine.status`, `engine.start`, `engine.stop`, `engine.loadModel`, `engine.unloadModel`,
   `engine.measuredFit`
 - `model.list`, `model.get`, `model.setActive`, `model.verify`, `model.remove`
-- `chat.send`, `chat.stop`
+- `chat.send`, `chat.stop`, `chat.list`, `chat.get`, `chat.create`, `chat.rename`,
+  `chat.setPinned`, `chat.delete`, `chat.clearMessages`, `chat.usage`
+- `settings.get`, `settings.patch`
+- `activity.list`, `activity.get`, `activity.export`, `activity.purge`
+- `memory.list`, `memory.get`, `memory.update`, `memory.approve`, `memory.reject`,
+  `memory.approveAllPending`, `memory.delete`, `memory.history`
+- `store.backup`, `store.backups`, `store.restore`, `store.export`, `store.purge`
 
-Two implementation notes that matter for reading the table:
+Implementation notes that matter for reading the table:
 
 1. In the desktop shell, `chat.stop` is intercepted in `src-tauri/src/lib.rs` before the core
    mutex and flips the shared `CancelFlag`; the `chat.stop` arm in `dispatch.rs` is what the
    unit tests exercise. Either way it halts the real generation.
-2. `chat.send` keys the stream by `conversationId` and `clientId` but the core holds no
-   conversation table. The id is passed through to `chat://token`; the messages themselves
-   live in `Chat.tsx` state.
+2. `chat.send` saves the owner's question *before* any model check, so a refusal leaves the
+   turn in the database next to its error. The first send to a conversation id the UI named
+   creates that exact row (`create_conversation_with_id`) instead of forking a second one.
+3. `Core::from_env()` opens `%APPDATA%\NexusAI\nexus.db` (overridable with `NEXUS_DATA_DIR`)
+   and restores `models.active` when the registry can resolve it. If the file cannot be
+   opened, every command that needs state refuses with `store.corrupt` and the reason.
 
 ## Verification
 
-Read on 2026-11-14 against `m1-first-answer` (`ba15fa2`). The live behaviour claim is backed by
-the gate run quoted in `TEST_RESULTS.md` §4 and `MEASUREMENTS.md` §14, not by the fact that the
-screens render.
+Read on 2026-11-17 against branch `m2-persistence`. Behaviour claims are backed by
+`TEST_RESULTS.md` §"2026-11-17 — M2 persistence" and the gate JSON `.m2-gate.json`
+(gitignored, reproduced by `tools/m2-gate.mjs`), not by the fact that the screens render.

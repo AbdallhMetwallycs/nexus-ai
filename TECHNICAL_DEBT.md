@@ -1,6 +1,6 @@
 # TECHNICAL_DEBT.md — NEXUS AI
 
-Numbered debt in the M1 build (`m1-first-answer`, `ba15fa2`). Debt here is a deliberate
+Numbered debt in the M2 build (`m2-persistence`, 2026-11-17). Debt here is a deliberate
 trade-off with a named trigger, not a to-do list. "Trigger" is the event that makes the debt
 more expensive than the fix.
 
@@ -14,15 +14,16 @@ more expensive than the fix.
 | TD-6 | Single engine instance; model switch is a full reload | Multi-model UX, or switch cost becomes a blocker |
 | TD-7 | Hand-written HTTP/1.1 client instead of a crate | First TLS/proxy/redirect need, or a framing bug |
 | TD-8 | `readyMs` means load-to-health, and is stale on reuse | A second consumer reads it |
-| TD-9 | Conversation state is in memory | M2 (next milestone) |
-| TD-10 | Only the system prompt and current turn are sent | First multi-turn claim, or M2 |
+| TD-9 | Conversation state is in memory | **Resolved 2026-11-17 (M2)** — SQLite store behind `chat.*` |
+| TD-10 | Only the system prompt and current turn are sent | **Resolved 2026-11-17 (M2)** — stored history, trimmed by budget |
 | TD-11 | Crash mapping has no unit test with a fake dead supervisor | CI, or the next change to crash detection |
-| TD-12 | Context rail estimates; `chat.usage` is unimplemented | Any pre-answer context warning |
+| TD-12 | Context rail still estimates locally, though `chat.usage` now exists | Any pre-answer context warning |
 | TD-13 | `chat.stop` is global, with two code paths | Scheduler or concurrent conversations (M4) |
 | TD-14 | Context bounds are literals outside `admission` | Changing context limits or exposing a setting |
 | TD-15 | Engine stdout/stderr is discarded; no structured log | First field bug that needs engine output |
 | TD-16 | The UI gate is manual and needs a running app | CI or nightly regression |
 | TD-17 | `npm audit` reports 4 advisories (3 moderate, 1 high), all in build/dev tooling except react-router | Before M6 packaging, or when routing accepts external URLs |
+| TD-18 | A stopped stream emits a usage frame of zero | **Resolved 2026-11-17 (M2)** — cancelled streams emit no frame and store no counts |
 
 ## TD-1 — No installer, signing, notarization or updater
 
@@ -108,26 +109,19 @@ return a complete result without pretending a reload happened.
 showing "loaded in X ms" on a switch. At that point split it into `loadedAt` / `lastReadyMs` or
 return `readyMs: 0` with an explicit `reused: true`.
 
-## TD-9 — Conversation state is in memory
+## TD-9 — Conversation state is in memory — resolved in M2
 
-**What.** `Chat.tsx` owns conversations and messages. The core has no `chat.list/get/create/
-rename/setPinned/delete/clearMessages` implementation.
-**Why it exists.** M1's deliverable is one real answer, not persistence; the M2 schema and the
-IPC shapes already exist (`PHASE2_DATA_MODEL.md`, `PHASE2_IPC_CONTRACT.md` §3.3).
-**Trigger.** M2, which is the next milestone. Any feature that assumes history (memory,
-knowledge citations, activity) is blocked on it.
-**Related.** KI-3.
+Closed 2026-11-17. The store crate owns `conversations`, `message` and `message_attachment`;
+`chat.list/get/create/rename/setPinned/delete/clearMessages` are matched in the core and the
+Chat screen reads them at mount. Backups copy the same rows. Evidence: `TEST_RESULTS.md`
+2026-11-17 §2 and §5.
 
-## TD-10 — Only the system prompt and current turn are sent
+## TD-10 — Only the system prompt and current turn are sent — resolved in M2
 
-**What.** `chat.send` builds two messages: `SYSTEM_PROMPT` and the current user content.
-Earlier turns remain in React state but never reach the engine. `trim_to_budget` exists but has
-no conversation to trim.
-**Why it exists.** It is the smallest honest M1 prompt path; there is no store to assemble a
-conversation from, and prefill is the measured product constraint.
-**Trigger.** The first multi-turn product claim, or M2 when message rows exist. The prompt
-budget must then be assembled from the store and trimmed by measured tokens, not characters.
-**Related.** KI-4.
+Closed 2026-11-17. `chat.send` reads the stored messages, maps them to user/assistant turns,
+and trims the assembled prompt to `context − answer allowance` with the measured token rule,
+so earlier turns reach the engine until the budget is exhausted.
+**Related.** KI-4 (closed).
 
 ## TD-11 — Crash mapping has no unit test with a fake dead supervisor
 
@@ -142,16 +136,18 @@ assumption.
 `engine.crashed` exactly once.
 **Related.** WORK_QUEUE rows 25–27.
 
-## TD-12 — Context rail estimates; `chat.usage` is unimplemented
+## TD-12 — The context rail still estimates locally
 
-**What.** Before the usage frame, the rail uses characters ÷ 4 for the numerator and the last
-load result or advertised window for the denominator. `chat.usage` exists in the contract but
-returns `not_implemented`.
-**Why it exists.** M1 has one event after generation and no per-conversation usage record; a
-request-time number would need the tokenizer or the engine's slot state, neither of which is
-wired.
-**Trigger.** A UI that must warn before sending (context budget, truncation warning), or M2
-when usage can be stored.
+**What.** Before and during an answer the rail uses characters ÷ 4 for the numerator and the
+last load result or advertised window for the denominator. `chat.usage` is now implemented
+(2026-11-17) and returns `measured: true` only when a stored usage row exists, but `Chat.tsx`
+still derives its number from stream events instead of calling it.
+**Why it exists.** M1 shipped the rail before the store; M2 needed the database wired first and
+did not rewrite the rail. The emitted `chat://usage` event after a completed answer is still the
+only measured number the rail shows.
+**Trigger.** A pre-send context warning, or the first time the rail and `chat.usage` disagree.
+Then call `chat.usage` on load and after each turn and delete the character estimate from the
+renderer.
 **Related.** KI-5.
 
 ## TD-13 — `chat.stop` is global, with two code paths
@@ -219,14 +215,9 @@ an externally supplied URL. Then upgrade Vite (major) and react-router together 
 
 **Verified-not-fixed:** this row records the audit output; nothing was upgraded in M1.
 
-## TD-18 — A stopped stream still emits a usage frame of zero
+## TD-18 — A stopped stream still emits a usage frame of zero — resolved in M2
 
-**What.** `chat.send` emits `chat://usage` after every stream that returns, including one that
-`chat.stop` aborted. Aborted during prefill, the outcome has no counted tokens, so the conversation
-rail shows `Context usage (measured) 0 tokens / 8k window` — a measured zero, which reads as "the
-answer used nothing" rather than "this turn was not counted".
-**Why it exists.** The emission is unconditional after `Ok(outcome)`; `StreamOutcome.cancelled`
-exists but is not consulted.
-**Trigger.** The next change to `dispatch.rs` (M2 conversation storage touches this path). Then skip
-the usage emission when `outcome.cancelled`, or emit it with a `measured: false` flag the rail
-already knows how to render.
+Closed 2026-11-17. `chat.send` distinguishes a cancelled outcome: it stores the partial answer
+with `stopped = true`, no prompt/completion counts, and emits no `chat://usage` frame. A stopped
+turn therefore never presents a measured zero.
+
