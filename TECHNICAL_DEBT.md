@@ -218,3 +218,15 @@ an externally supplied URL. Then upgrade Vite (major) and react-router together 
 `npm run build`, `npm run typecheck` and the UI gate.
 
 **Verified-not-fixed:** this row records the audit output; nothing was upgraded in M1.
+
+## TD-18 — A stopped stream still emits a usage frame of zero
+
+**What.** `chat.send` emits `chat://usage` after every stream that returns, including one that
+`chat.stop` aborted. Aborted during prefill, the outcome has no counted tokens, so the conversation
+rail shows `Context usage (measured) 0 tokens / 8k window` — a measured zero, which reads as "the
+answer used nothing" rather than "this turn was not counted".
+**Why it exists.** The emission is unconditional after `Ok(outcome)`; `StreamOutcome.cancelled`
+exists but is not consulted.
+**Trigger.** The next change to `dispatch.rs` (M2 conversation storage touches this path). Then skip
+the usage emission when `outcome.cancelled`, or emit it with a `measured: false` flag the rail
+already knows how to render.

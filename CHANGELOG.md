@@ -15,7 +15,9 @@ evidence document named.
   text shown in the bubble is now what is sent. The attach toast no longer says "Phase 1" in a live
   build, and the conversation rail says `History sent: latest turn only` (KI-4). Verified:
   `cargo test -p nexus-core` 53/0, clippy clean, live `live_chat` pass, `npm run typecheck` and
-  `npm run build` exit 0 — `TEST_RESULTS.md` 2026-11-16.
+  `npm run build` exit 0, and the live UI gate re-run at exit 0 (`NEXUS OK`, stop held at 1
+  character, `engine.crashed:` then `RECOVERED`, 0 external requests) — `TEST_RESULTS.md`
+  2026-11-16.
 - **Model Manager could show a model as active when it had not loaded.** In live mode `Set active`
   wrote the active id (and `localStorage`) *before* calling `engine.loadModel`, so a refused
   admission or a failed load still painted the `active` badge and remembered the choice. The badge

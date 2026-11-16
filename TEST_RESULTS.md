@@ -64,14 +64,34 @@ afterwards. `readyMs` 34,556 is a cold load on this run.
   dist/assets/index-B5k_abZ7.js   436.41 kB │ gzip: 126.41 kB
 ```
 
-### 5. What was not re-run
+### 5. Live UI gate — re-run after the Chat change
 
-`tools/ui-gate.mjs` was not driven today. Its last recorded run is §8 of 2026-11-14 (`ba15fa2`),
-whose evidence stands because no core, transport, or streaming code changed since. Today's only
-shipped change is in `src/pages/Chat.tsx`: the waiting indicator renders once instead of twice in
-live mode, an attachment-only send passes the bubble text as `content` (the core rejects empty
-content), the attach toast stops saying "Phase 1" in a live build, and the conversation rail
-states `History sent: latest turn only` (KI-4). The live gate does not exercise attachments.
+`npm run tauri dev` with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333`,
+then `node tools/ui-gate.mjs` from the repo root: **exit 0**, run window
+`2026-11-16T22:09:53Z` → `22:12:03Z` (129 s). Steps copied from the driver log:
+
+```
+[host-detected]  {"isTauri":true,"waitedMs":4}
+[ipc-direct]     {"engineStatus":{"installed":true,"running":false,"version":"b12189"},"models":[{"id":"llama-3.2-3b-instruct-q4-k-m","ctx":131072}]}
+[chat-ready]     {"engineLine":"Local engine · Llama 3.2 3B Instruct · offline · nothing leaves this machine"}
+[answer-complete]{"totalMs":63379,"text":"NEXUS OK","context":"122","error":null}
+[stop]           {"msToStopClick":7313,"charsBeforeStop":1,"note":"Stopped — this answer is incomplete.","streamingAfter":false,"charsAfterSettle":1,"sendBack":true}
+[engine-killed]  {"killOutput":"SUCCESS: The process \"llama-server.exe\" with PID 15616 has been terminated.","charsBefore":3,"banner":"engine.crashed: The local engine stopped while answering. The next message will restart it.","thinking":false,"messages":6,"failedNote":true,"waitedMs":2567}
+[recovered]      {"ms":47223,"text":"RECOVERED"}
+[network]        {"externalRequestCount":0}
+consoleErrors    []
+```
+
+Screenshot `screenshots/m1-live-ui-gate.png`. `totalMs` 63,379 includes the cold model load,
+because the gate sends before `engine.loadModel` returns; the rail then reports 122 measured
+context tokens. Stop was pressed during prefill (1 character emitted) and nothing grew during the
+2.5 s that followed.
+
+One wrinkle the run exposed: at the stop check the rail read `Context usage (measured) 0 tokens /
+8k window`. `chat.stop` ends the stream before any completion token, and the core still emits the
+usage frame it has — which was empty. The number is what the core counted, not an invention, but
+"measured 0" after a stop is misleading; recorded as TD-11 (do not emit usage when the stream was
+cancelled).
 
 ---
 
