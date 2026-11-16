@@ -10,11 +10,68 @@ memory, tokens) live in `MEASUREMENTS.md`; this file records pass/fail and the e
 | --- | --- |
 | Machine | owner laptop, Windows, 20.3 GB physical RAM, 3 physical cores |
 | Worktree | `D:\NEXUS-AI-m1`, branch `m1-first-answer` |
-| Rust | 1.99.0 MSVC, `cargo clippy` from the same toolchain |
+| Rust | 1.99.1 MSVC, `cargo clippy` from the same toolchain |
 | Node | 24.17.0, npm with `vite` 5.4.21, `@tauri-apps/cli` 2.12.4 |
 | WebView2 | 157.0.4341.46 |
 | Engine | `D:\NEXUS-SIDECAR\b12189\llama-server.exe` (pinned b12189) |
 | Model | `D:\NEXUS-MODELS\Llama-3.2-3B-Instruct-Q4_K_M.gguf` (only authorised file) |
+
+---
+
+## 2026-11-16 — Post-M1 hardening (Chat honesty refinements)
+
+Worktree `D:\NEXUS-AI-m1` at `daac7ee` plus the four `src/pages/Chat.tsx` refinements below.
+`git status` reports no modification in `crates/` or `src-tauri/`: the core and shell are the
+tagged implementation. A duplicate in-worktree rewrite was discarded, not shipped (D-038).
+
+### 1. Core unit tests
+
+```
+> cargo test -p nexus-core
+running 53 tests
+test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.07s
+```
+
+Exit code 0.
+
+### 2. Lints
+
+```
+> cargo clippy -p nexus-core --all-targets -- -D warnings
+    Checking nexus-core v0.1.0 (D:\NEXUS-AI-m1\crates\nexus-core)
+    Finished `dev` profile [unoptimized] target(s) in 10.52s
+```
+
+Exit code 0.
+
+### 3. Live chain: load → stream → usage (real engine, real GGUF)
+
+```
+> NEXUS_LIVE_ENGINE=1 cargo test -p nexus-core live_chat -- --nocapture
+loaded llama-3.2-3b-instruct-q4-k-m: {"contextCapped":8192,"loadedGB":2.3447265625,"readyMs":34556,"threads":3}
+streamed "NEXUS OK" in 5 frames, private Some(ProcessMemory { working_set_mb: 4213, private_mb: 2403 })
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 52 filtered out; finished in 61.80s
+```
+
+Exit code 0. The test terminates the engine at the end; `tasklist` showed no `llama-server.exe`
+afterwards. `readyMs` 34,556 is a cold load on this run.
+
+### 4. Frontend
+
+```
+> npm run typecheck        → TYPECHECK_EXIT=0 (tsc --noEmit)
+> npm run build            → ✓ built in 25.04s, BUILD_EXIT=0
+  dist/assets/index-B5k_abZ7.js   436.41 kB │ gzip: 126.41 kB
+```
+
+### 5. What was not re-run
+
+`tools/ui-gate.mjs` was not driven today. Its last recorded run is §8 of 2026-11-14 (`ba15fa2`),
+whose evidence stands because no core, transport, or streaming code changed since. Today's only
+shipped change is in `src/pages/Chat.tsx`: the waiting indicator renders once instead of twice in
+live mode, an attachment-only send passes the bubble text as `content` (the core rejects empty
+content), the attach toast stops saying "Phase 1" in a live build, and the conversation rail
+states `History sent: latest turn only` (KI-4). The live gate does not exercise attachments.
 
 ---
 

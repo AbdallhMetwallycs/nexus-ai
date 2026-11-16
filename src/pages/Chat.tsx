@@ -282,10 +282,13 @@ export default function Chat() {
       toast('No installed model was found. Put a GGUF file in the models folder.', 'error');
       return;
     }
+    // `chat.send` refuses empty content, so an attachment-only turn sends the same
+    // sentence the bubble shows instead of an empty string the core would reject.
+    const content = text || `(attached ${attachments.map((a) => a.name).join(', ')})`;
     const userMessage: ChatMessage = {
       id: nextId(),
       role: 'user',
-      content: text || `(attached ${attachments.map((a) => a.name).join(', ')})`,
+      content,
       ts: new Date().toISOString(),
       attachments: attachments.length ? attachments : undefined,
     };
@@ -343,7 +346,7 @@ export default function Chat() {
     setEngineCap(loaded.data.contextCapped);
     const sent = await transport.call('chat.send', {
       conversationId: conversation.id,
-      content: text,
+      content,
       clientId: messageId,
     });
     if (!sent.ok) {
@@ -435,7 +438,12 @@ export default function Chat() {
     }));
     setAttachments((prev) => [...prev, ...next].slice(0, 4));
     e.target.value = '';
-    toast(`${next.length} file(s) queued — analysis is disabled in Phase 1`, 'info');
+    toast(
+      live
+        ? `${next.length} file(s) attached — only your message text is sent to the model in this build`
+        : `${next.length} file(s) queued — analysis is disabled in Phase 1`,
+      'info',
+    );
   };
 
   const createConversation = () => {
@@ -638,19 +646,19 @@ export default function Chat() {
                       onRegenerate={m.role === 'assistant' && m === active.messages[active.messages.length - 1] ? regenerate : undefined}
                     />
                   ))}
-                  {thinking && (
+                  {thinking && (!live || !streamingId) && (
                     <div className="flex items-center gap-2.5 rounded-card border border-surface-line bg-surface-raised px-4 py-3">
                       <Bot size={15} className="text-accent" />
                       <span className="flex items-center gap-1 text-xs text-ink-muted">
-                        {live ? 'Generating on this machine' : 'Generating simulated reply'}
+                        Generating simulated reply
                         <span className="inline-flex gap-0.5">
                           {[0, 1, 2].map((i) => (
                             <span key={i} className="h-1 w-1 animate-pulse-dot rounded-full bg-accent" style={{ animationDelay: `${i * 220}ms` }} />
                           ))}
                         </span>
                       </span>
-                      <Badge tone={live ? 'ok' : 'idle'} className="ml-auto">
-                        {live ? 'local engine' : 'no real inference'}
+                      <Badge tone="idle" className="ml-auto">
+                        no real inference
                       </Badge>
                     </div>
                   )}
@@ -775,6 +783,7 @@ export default function Chat() {
                 <KeyValue k="Model" v={displayModel} />
                 <KeyValue k="Messages" v={String(active.messages.length)} mono />
                 <KeyValue k="Updated" v={timeAgo(new Date(active.updatedAt))} />
+                {live && <KeyValue k="History sent" v="latest turn only" />}
               </div>
             </ContextPanelCard>
             <ContextPanelCard title="Agents in this chat">

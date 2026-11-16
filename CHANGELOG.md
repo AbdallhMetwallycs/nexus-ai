@@ -8,6 +8,14 @@ evidence document named.
 
 ### Fixed
 
+- **Chat showed two waiting indicators, and an attachment-only send was refused.** In live mode the
+  thread rendered the assistant placeholder ("Waiting for the engine…") *and* a separate "Generating
+  on this machine" row; the row now renders only on the simulated path. A send with attachments and
+  no text passed `content: ''` to `chat.send`, which the core rejects with `validation.field`; the
+  text shown in the bubble is now what is sent. The attach toast no longer says "Phase 1" in a live
+  build, and the conversation rail says `History sent: latest turn only` (KI-4). Verified:
+  `cargo test -p nexus-core` 53/0, clippy clean, live `live_chat` pass, `npm run typecheck` and
+  `npm run build` exit 0 — `TEST_RESULTS.md` 2026-11-16.
 - **Model Manager could show a model as active when it had not loaded.** In live mode `Set active`
   wrote the active id (and `localStorage`) *before* calling `engine.loadModel`, so a refused
   admission or a failed load still painted the `active` badge and remembered the choice. The badge

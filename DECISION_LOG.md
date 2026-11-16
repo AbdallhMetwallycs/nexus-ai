@@ -297,6 +297,21 @@ fallback, so the approved look is unchanged. *Why:* "local only" is a product bo
 the app cannot prove it never makes is not local. The npm fetch is development-time work, like the
 earlier dependency fetches, and is recorded here per `AGENTS.md` rule 4.
 
+**D-038 — The tagged M1 implementation stands; a duplicate in-worktree rewrite was discarded, not
+merged.** While M1 was being resumed after a context break, `crates/nexus-core/{engine,registry,
+admission,inference,dispatch,ipc_types}.rs` and `src-tauri/src/lib.rs` were re-implemented in the
+worktree under a different internal API (`Core`/`Runtime`/`EventSink`, `CancelHandle`-per-send).
+The history check showed the same milestone had already shipped — `m1-core` (`ff3edb5`) and
+`m1-first-answer` (`ba15fa2`) — with a passing live UI gate, reuse logic in `Engine::start`, and 53
+recorded tests. The rewrite passed 60 of its own tests and clippy, but its own live reuse assertion
+failed (a repeat `engine.loadModel` took 9.26 s, i.e. a reload), so it was not equivalent. The seven
+files were restored to `HEAD` — no tagged ref moved, no `git checkout --`/`reset --hard` used — and
+the rewrite is preserved outside the repo at `%TEMP%\nexus-m1-rewrite-2026-11-16.patch`
+(191,948 bytes, sha256 starts `595de1af`) for anyone who wants to mine the tests. *Why:* evidence
+beats churn. A proven, gated implementation is not replaced by an unproven duplicate merely because
+the duplicate is newer in the session, and a second implementation of the same seam is how contract
+drift starts.
+
 ## Deferred (explicitly not in Phase 1)
 
 LLM runtime (Ollama/llama.cpp), backend/API, databases, persistent memory,
