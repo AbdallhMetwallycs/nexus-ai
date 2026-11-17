@@ -40,6 +40,9 @@ pub struct ChatMessage {
     pub stopped: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub usage: Option<Usage>,
+    /// Citations the answer was grounded in: `{ documentId, citation, page }`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub citations: Option<Value>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

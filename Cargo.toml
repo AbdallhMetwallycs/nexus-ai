@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/nexus-core", "crates/nexus-store", "src-tauri"]
+members = ["crates/nexus-core", "crates/nexus-store", "crates/nexus-kb", "src-tauri"]
 
 # src-tauri joins this workspace when the shell lands (M1, task 34). Until then the
 # core is testable with no GUI dependency at all, which is what `cargo test -p nexus-core`

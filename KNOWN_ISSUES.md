@@ -159,3 +159,63 @@ it does not crash the renderer or the host.
 
 **Impact:** do not generalise the measured timings or the RAM line to another machine.
 **Workaround:** none; re-measure before claiming.
+
+## KI-13 — The folder watcher is one poll loop, and a slow tree delays every root
+
+**What.** `KbMonitor::start` spawns exactly one thread (`nexus-kb-monitor`). Each tick it opens its
+own `Store` connection, walks every watching root serially and re-indexes what changed, then sleeps
+2 s. There is no per-file thread and no parallel scan. A tree whose walk plus parse takes longer
+than a tick therefore delays changes in *all* watched roots, and the monitor connection shares the
+WAL database with the UI's connection.
+**Impact.** Change latency is "scan time + up to 2 s", not a fixed 2 s. Large trees are not
+load-tested; 201 text documents is the largest recorded run.
+**Workaround:** watch a subfolder rather than a whole drive.
+**Target:** TD-19 (background job queue).
+
+## KI-14 — A memory is captured only from an explicit request
+
+**What.** `chat.send` proposes a `pending` memory only when the message starts with an explicit
+English or Arabic "remember …" form (D-045). Ordinary statements of preference are not mined in
+this build.
+**Impact.** The Memory Center stays empty unless the owner asks in that form; nothing is
+implicitly remembered.
+**Workaround:** phrase the request explicitly ("remember that …" / "تذكر أن …").
+**Target:** M5 (learning loop), if inference capture is added there.
+
+## KI-15 — A watched folder is typed, not picked
+
+**What.** The Knowledge screen accepts a typed absolute path; there is no native folder dialog.
+A path with a typo fails with the core's error and indexes nothing.
+**Impact.** Slower first setup; no accidental writes (the core only reads).
+**Workaround:** paste the path from Explorer's address bar; surrounding quotes are stripped.
+**Target:** TD-22 (Tauri dialog plugin at packaging time).
+
+## KI-16 — "Vector" retrieval is a hashed bag of words, not semantics
+
+**What.** D-043: 256-dimension FNV-1a token hashing plus cosine, fused with FTS5 by RRF. It ranks
+overlapping vocabulary and word order; it does not understand paraphrase or synonyms. Arabic is
+additionally degraded by FTS5's porter tokenizer, which stems English only.
+**Impact.** A question with no shared words with the chunk will not retrieve it. Do not present
+`measured: true` as "semantic search".
+**Workaround:** include a distinctive term from the document in the question.
+**Target:** TD-20 (local embedding model behind the same `embed`/`cosine` seam).
+
+## KI-17 — Bulk documents add noise to retrieved context
+
+**What.** The gate's 200 filler files were retrieved alongside the relevant document
+(`filler-013`, `filler-000`, `filler-001` appeared in the citations next to `admission.md`). RRF
+keeps ranking cheap, but nothing filters near-duplicate low-value chunks out of the prompt budget.
+**Impact.** On a large flat tree, prompt tokens are spent on weak matches; the answer can be
+distracted.
+**Workaround:** watch focused folders; give documents distinct vocabulary.
+**Target:** TD-21 (relevance floor and per-document diversity cap).
+
+## KI-18 — First indexing of a large folder blocks the core
+
+**What.** `kb.watchRoot` and `kb.reindex` are synchronous (D-046) and hold the core mutex while
+they parse. A 201-file text tree completed inside the gate; a folder of large PDFs would make chat
+wait.
+**Impact.** UI commands that need the core queue behind the scan; the scan itself is not
+cancellable.
+**Workaround:** watch a small folder first; re-index single documents.
+**Target:** TD-19 (background scan outside the core mutex).

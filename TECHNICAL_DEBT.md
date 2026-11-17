@@ -221,3 +221,47 @@ Closed 2026-11-17. `chat.send` distinguishes a cancelled outcome: it stores the 
 with `stopped = true`, no prompt/completion counts, and emits no `chat://usage` frame. A stopped
 turn therefore never presents a measured zero.
 
+
+## TD-19 — Indexing runs synchronously inside the core mutex
+
+**What.** `kb.watchRoot` and `kb.reindex` scan and parse inside the `ipc` call while holding the
+core mutex (D-046); the poll monitor is the only background indexing, and it re-scans whole roots.
+**Why it exists.** There is no job queue until M4's scheduler, and returning a `jobId` for work
+that had not started would be the fake functionality the project forbids.
+**Trigger.** The first folder with large PDFs, or any second consumer of the core during a scan.
+Then: a real job queue (M4), scan work moved off the mutex, and progress events (`job://progress`
+is already in the contract).
+**Verified-not-fixed:** the 201-file text tree in the M3 gate is the largest measured scan.
+
+## TD-20 — Retrieval has no learned embedding model
+
+**What.** The vector half of retrieval is a 256-dimension hash of tokens with cosine similarity
+(D-043), fused with FTS5 by RRF. It is lexical, not semantic, and FTS5's porter stemmer helps
+English only.
+**Why it exists.** A second GGUF embedding model would need another admission budget and a
+download, both outside this milestone.
+**Trigger.** When answers miss documents that share meaning but not words, or when Arabic search
+is part of the acceptance bar. Then: a local embedding model behind the existing `embed`/`cosine`
+functions in `crates/nexus-kb`, with its admission measured like the chat model.
+**Verified-not-fixed:** `measured: true` currently means "every chunk has a stored vector", not
+"a semantic model ran".
+
+## TD-21 — No relevance floor or diversity cap in retrieved context
+
+**What.** `chat.send` takes the top chunks and memories by fused score and puts them in the prompt
+without a minimum score and without limiting how many chunks come from one document. The M3 gate
+retrieved three filler files next to the relevant one.
+**Why it exists.** Any threshold chosen before measuring on real owner documents would be a guess.
+**Trigger.** When the prompt budget is routinely spent on weak matches, or when answers start
+quoting filler. Then: measure score distributions on the owner's tree, set a floor, and cap
+per-document contributions.
+**Verified-not-fixed:** the gate recorded the noise (`KI-17`); nothing filters it yet.
+
+## TD-22 — No native folder picker
+
+**What.** The Knowledge screen takes a typed path because adding a dialog plugin adds a Tauri
+permission surface that M6 packaging has not designed yet.
+**Why it exists.** `withGlobalTauri` and the single `ipc` command are deliberately the whole
+bridge; a dialog plugin is a second bridge.
+**Trigger.** Packaging (M6), or the first non-technical user of the Knowledge screen.
+**Verified-not-fixed:** `WatchFolderModal` accepts a path string only.

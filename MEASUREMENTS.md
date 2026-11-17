@@ -529,3 +529,27 @@ An earlier attempt the same hour was refused at admission because 1.3 GB was fre
 `TEST_RESULTS.md` section 8.
 
 
+
+## 15. Knowledge indexing and retrieval (M3, 2026-11-17) — [verified, one run]
+
+Machine and build as in §1; worktree `D:\NEXUS-AI-m1`, branch `m2-persistence`; model loaded
+`llama-3.2-3b-instruct-q4-k-m`; gate `tools/m3-gate.mjs` (21/21 steps, exit 0).
+
+| Quantity | Value | How measured |
+| --- | --- | --- |
+| Fixture tree | 201 files (1 md with 2 sections + 200 filler md) | written by the gate |
+| `kb.watchRoot` → `admission.md` indexed | `indexed · 2 chunks` | polled `kb.listDocuments` from the page |
+| Whole tree indexed | `total 201` | `kb.listDocuments` with limit 500 |
+| `kb.search` over 201 documents | **26.50 ms** | `performance.now()` around the `ipc` round trip in the page |
+| Vector state reported | `measured: true` | `kb.search` result field |
+| Rename → re-listed | `admission-renamed.md`, total still 201 | polled after rename on disk (≤ 2 s poll + scan) |
+| Citations on one answer | 4 (`admission-renamed.md §Admission`, `filler-013`, `filler-000`, `filler-001`) | `chat.send` result |
+| Pending memory retrieval | 0 hits before approval, 1 hit after | `memory.search` |
+
+**What this section proves:** parsing, chunking, storage, the monitor, fused retrieval and the
+memory approval gate all ran on this machine inside the real window. The 26.50 ms is retrieval
+only; it does not include model prefill, and it is not a claim about larger or scanned documents.
+
+**Still open:** one tree of plain-text documents; no OCR; no timing for pdf/docx/xlsx at this
+scale; a single run per step. The hashed-vector half is lexical (D-043), so this number says
+nothing about semantic recall.

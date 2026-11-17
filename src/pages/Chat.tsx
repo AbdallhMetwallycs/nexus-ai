@@ -375,6 +375,27 @@ export default function Chat() {
       } else {
         fail(sent.error.code, sent.error.message);
       }
+      return;
+    }
+    // The core reports the chunks this answer was grounded in. Attach them to the
+    // message so the citations survive re-render and match what chat.get returns later.
+    const citations = sent.data.citations ?? [];
+    if (citations.length > 0) {
+      const targetId = sent.data.messageId;
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id !== conversation.id
+            ? c
+            : {
+                ...c,
+                messages: c.messages.map((m) =>
+                  m.role === 'assistant' && (m.id === targetId || m.id === messageId)
+                    ? { ...m, citations }
+                    : m,
+                ),
+              },
+        ),
+      );
     }
   };
 
@@ -1023,6 +1044,19 @@ function MessageBubble({
             </>
           )}
         </div>
+
+        {!isUser && message.citations && message.citations.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+            <span className="text-2xs font-bold uppercase tracking-widest text-ink-muted">Sources</span>
+            {message.citations.map((c) => (
+              <Tooltip key={`${c.documentId}-${c.citation}`} content={`Document ${c.documentId}`} side="bottom" delay={150}>
+                <span className="rounded-md border border-accent/25 bg-accent/5 px-1.5 py-0.5 text-2xs text-ink-secondary">
+                  {c.citation}
+                </span>
+              </Tooltip>
+            ))}
+          </div>
+        )}
 
         {status === 'stopped' && (
           <p className="mt-1 text-2xs text-state-warn">Stopped — this answer is incomplete.</p>

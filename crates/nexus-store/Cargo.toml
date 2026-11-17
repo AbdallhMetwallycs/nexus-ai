@@ -14,6 +14,7 @@ description = "NEXUS AI local SQLite store: schema, migrations, WAL, conversatio
 rusqlite = { version = "0.32", features = ["bundled-full", "backup"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+nexus-kb = { path = "../nexus-kb" }
 
 [lib]
 name = "nexus_store"

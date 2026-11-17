@@ -43,6 +43,13 @@ export interface Attachment {
   sizeKB: number;
 }
 
+/** The subset of a retrieved chunk an assistant message keeps. */
+export interface Citation {
+  documentId: string;
+  citation: string;
+  page: number | null;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -51,6 +58,8 @@ export interface ChatMessage {
   modelId?: string;
   agentId?: string;
   attachments?: Attachment[];
+  /** Documents an answer was grounded in. Absent when nothing was retrieved. */
+  citations?: Citation[];
 }
 
 export interface Conversation {
@@ -101,6 +110,10 @@ export interface KbDocument {
   indexed: IndexStatus;
   updatedAt: string;
   excerpt: string;
+  /** Present when the row came from the local index rather than the browser demo. */
+  path?: string;
+  chunkCount?: number;
+  lastError?: string;
 }
 
 export type ToolStatus = 'ready' | 'disabled' | 'error' | 'running';

@@ -172,12 +172,20 @@ chat.setPinned(id, pinned):                  Result<void>
 chat.delete(id):                             Result<void>
 chat.clearMessages(id):                      Result<void>
 chat.send({ conversationId, content, attachments?, clientId }):
-    Result<{ messageId: string }>            // streams on chat://token
+    Result<{ messageId: string; citations?: Citation[] }>   // streams on chat://token
 chat.stop(conversationId):                   Result<void>
 chat.regenerate({ conversationId, messageId }): Result<{ messageId: string }>
 chat.usage(conversationId):                  Result<{ contextUsed: number; contextMax: number;
                                                      estTokens: number; measured: boolean }>
+
+interface Citation { documentId: string; citation: string; page: number | null }
 ```
+
+`chat.send` retrieves before generating: approved memories (`memory.search` semantics) and the top
+indexed chunks (`kb.search`). Both enter the system prompt as grounded context, and the chunks come
+back as `citations` on the result and on the stored message (`chat.get`), so the Chat screen can
+show where an answer was grounded. A retried send with the same `clientId` returns the stored
+`messageId` and its stored citations instead of generating twice.
 
 `chat.usage` replaces the "CONTEXT USAGE (SIMULATED)" rail. The `measured: false` flag lets the UI
 keep saying "simulated" until it is genuinely a count.
@@ -266,13 +274,14 @@ system the owner can trust and one they have to take on faith.
 kb.tree():                       Result<KbFolder[]>
 kb.listDocuments({ folderId?, collection?, types?, query?, limit?, offset? }):
     Result<{ items: KbDocument[]; total: number }>
-kb.watchRoot(path):              Result<{ root: string }>
+kb.watchRoot(path):              Result<{ root: string; label: string }>
 kb.unwatchRoot(path):            Result<void>
 kb.reindex(id):                  Result<{ jobId: string }>
 kb.deleteDocument(id):           Result<void>
 kb.moveDocument(id, collection): Result<void>
-kb.stats():                      Result<{ documents: number; chunks: number; indexedGB: number;
-                                          pending: number; failed: number }>
+kb.stats():                      Result<{ documents: number; chunks: number; indexedBytes: number;
+                                          pending: number; failed: number;
+                                          roots: { path: string; watching: boolean }[] }>
 kb.search({ query, collections?, maxResults? }):
     Result<{ items: RetrievedChunk[]; measured: boolean }>
 kb.ingestAttachment({ conversationId, messageId, paths }):
@@ -286,6 +295,15 @@ interface RetrievedChunk {
 
 `kb.stats` is what replaces the mock storage rail; `citation` is what makes the Document Analyst
 agent's page-referenced answers real.
+
+Implemented in M3 (2026-11-17). `kb.watchRoot` canonicalises the path, adds one root row per path
+(idempotent), scans it synchronously and starts a polling monitor (2 s) that keeps the index in
+step while the app runs. Supported parsers are md, txt, csv, pdf, docx and xlsx; unsupported files
+are skipped by name and a file that cannot be parsed is stored as `failed` with `lastError` rather
+than crashing the scan. `kb.reindex` is synchronous and records a finished `job` row (there is no
+job queue yet), so `jobId` names a completed job. Retrieval fuses FTS5 `bm25` with a local
+hashed-vector cosine by reciprocal-rank fusion (`k = 60`); `measured: true` means every stored
+chunk carries its vector, and no model is downloaded to compute it.
 
 ### 3.9 `net.*` — connectivity policy
 
@@ -420,10 +438,10 @@ the screen's `DemoNotice` come off in the same commit.
 | Memory | "Memory updated (prototype only)" | `memory.update` |
 | Memory | "N pending memories approved (prototype only)" | `memory.approveAllPending` |
 | Memory | "Memory deleted from prototype state — nothing persists anyway" | `memory.delete` |
-| Knowledge | "Re-indexing … (simulated)" / "Queued … for indexing (simulated)" | `kb.reindex` → `job://progress` |
-| Knowledge | `"…" indexed — no real parser ran` | `kb://document` with a real `IndexStatus` |
-| Knowledge | "Document removed from prototype state" | `kb.deleteDocument` |
-| Knowledge | "Moved … to … (prototype state)" | `kb.moveDocument` |
+| Knowledge | "Re-indexing … (simulated)" / "Queued … for indexing (simulated)" | replaced by `kb.reindex` (M3) |
+| Knowledge | `"…" indexed — no real parser ran` | replaced by the real `IndexStatus` and chunk count from the index (M3) |
+| Knowledge | "Document removed from prototype state" | replaced by `kb.deleteDocument` (M3) |
+| Knowledge | "Moved … to … (prototype state)" | replaced by `kb.moveDocument` (M3) |
 | Internet | "Switched to Offline mode (simulated)" / "Online … simulated only, no network stack exists here" | `net.setMode` enforced in policy |
 | Internet | "You're up to date (simulated check — no network request made)" | `net.checkUpdates` real job |
 | Internet | "Rule stored in prototype state (never used to reach the network here)" | `net.addAllRule` |

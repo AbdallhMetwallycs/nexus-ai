@@ -6,6 +6,25 @@ evidence document named.
 
 ## [Unreleased]
 
+### Added — M3 knowledge and memory (2026-11-17)
+
+- **`crates/nexus-kb`**: local parsing (md, txt, csv, pdf via `lopdf`, docx via `zip` +
+  `quick-xml`, xlsx via `calamine`), section-aware chunking, 256-dimension hashed-token vectors and
+  cosine similarity. Ten tests, including a corrupt PDF that ends `failed` without a panic.
+- **Core router**: `kb.tree|listDocuments|stats|watchRoot|unwatchRoot|reindex|deleteDocument|`
+  `moveDocument|search|ingestAttachment` and `memory.search` (54 commands now matched). A watched
+  root is scanned immediately and re-checked by a single 2 s polling monitor; a rename keeps the
+  document id by content fingerprint.
+- **Retrieval in chat**: `chat.send` retrieves approved memories plus the top chunks by FTS5 bm25
+  fused with the hashed-vector cosine (RRF, k = 60), places them in the prompt before generation,
+  and returns `citations`; an idempotent retry now returns the citations stored on the message.
+- **Memory capture**: an explicit "remember that …" / "تذكر أن …" request proposes a `pending`
+  memory sourced from the conversation. Pending rows are excluded from retrieval until approved.
+- **Screens**: Knowledge Base is real (watch, measured index stats, re-index, move, remove,
+  preview of stored chunks); Chat renders a Sources row with one chip per retrieved citation.
+- **`tools/m3-gate.mjs`**: 21-step live gate over CDP. Recorded 21/21 PASS, `kb.search` over 201
+  documents in 26.50 ms, pending→approved memory 0→1 hits. Evidence in `TEST_RESULTS.md`.
+
 ### Added — M2 persistence (2026-11-17)
 
 - **`crates/nexus-store`**: SQLite (rusqlite 0.32.1, bundled-full + backup) with WAL,

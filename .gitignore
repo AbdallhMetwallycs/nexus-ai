@@ -27,6 +27,8 @@ src-tauri/target/
 src-tauri/gen/
 .ui-gate.json
 .m2-gate.json
+.m3-gate.json
+.m3-gate-tree/
 
 # models/          # GGUF weights stay out of the repo by design
 # nexus.db*

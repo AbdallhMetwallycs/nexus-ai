@@ -299,7 +299,7 @@ line is the store's child-process test, not an app kill during generation. Tagge
 
 ---
 
-### M3 — Knowledge and Memory
+### M3 — Knowledge and Memory — **DONE 2026-11-17**
 
 **Scope:** folder watch, parsers (md/txt/csv first, then pdf/docx/xlsx), chunking, embedding,
 FTS5 + vector retrieval with citations, memory service with approval-gated writes and retrieval
@@ -315,7 +315,23 @@ create a pending memory               → NOT retrievable; approve it → IS ret
 cargo test -p nexus-kb                → parser fixtures pass; a corrupt pdf yields failed, not panic
 ```
 **Honesty swap:** Knowledge Base and Memory Center banners come off; "STORAGE (MOCK)" becomes
-measured; the Document Analyst agent's page-referenced answers become real.
+measured; chat answers carry citations back to the retrieved chunks.
+
+**Result (2026-11-17):** all six gate lines ran in one live session (`tools/m3-gate.mjs`,
+21/21 steps PASS; evidence in `TEST_RESULTS.md` §"2026-11-17 — M3 knowledge and memory"):
+a watched tree of 201 documents indexed to `indexed` with real chunk counts; `kb.search` over that
+tree cited `admission.md §Admission` in **26.50 ms** with `measured: true`; renaming the file on
+disk updated the index without changing the total; `chat.send` returned four citations including
+`admission-renamed.md`; an explicit "remember that …" request proposed a pending memory that
+`memory.search` could not see (0 hits) until `memory.approve` made it retrievable (1 hit).
+`cargo test -p nexus-kb` 10/0, `-p nexus-store` 12/0, `-p nexus-core` 63/0, clippy clean,
+`npx tsc --noEmit` and `npm run build` exit 0. Tagged `m3-knowledge`.
+
+What the honesty swap actually changed: the Knowledge Base screen is now real (watch, list, search
+stats, re-index, move, remove, preview of what retrieval sees); Chat renders a Sources row from the
+citations the core returns. Memory Center still only reads, edits, approves and archives — a memory
+is created by the core from an explicit request in chat, not from the Memory Center screen — and
+the Document Analyst agent screen remains M4 because no tool loop exists yet.
 
 ---
 

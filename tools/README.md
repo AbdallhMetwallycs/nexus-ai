@@ -52,3 +52,27 @@ them back after the restart, checks that the renderer painted `html.light`, then
 `store.backup`, `store.restore` with the path the backup returned, and compares conversation row
 counts before and after. It writes `.m2-gate.json` (gitignored) and exits 0 only when every step
 passed. Env: `NEXUS_CDP_PORT`, `NEXUS_GATE_OUT`.
+
+## m3-gate.mjs — knowledge and memory evidence (M3)
+
+Runs in one launch against the real window and the real model. It writes a fixture tree
+(`.m3-gate-tree/`: one `admission.md` and 200 `bulk/filler-NNN.md`), indexes it through
+`kb.watchRoot`, then checks parsing, retrieval, rename handling, the chat citation path, the memory
+approval gate, and both screens:
+
+```powershell
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9333"
+npm run tauri dev
+node tools/m3-gate.mjs
+```
+
+What it asserts, in order: the fixture is indexed with a chunk count; `kb.search` cites the
+document, reports `measured: true` and finishes in under a second over 201 documents; renaming the
+file on disk updates the index without changing the total; `chat.send` answers with citations that
+include the renamed file; an explicit "remember that …" message creates a pending memory that
+`memory.search` cannot see until `memory.approve`; the Knowledge screen shows the live index with
+no demo notice; the Chat screen paints a Sources row.
+
+It writes `.m3-gate.json` (gitignored), deletes every row and memory it created, unwatches the
+root and removes the fixture tree. Env: `NEXUS_CDP_PORT`, `NEXUS_GATE_OUT`. Exit 0 means every
+step passed; the JSON is written on failure too.

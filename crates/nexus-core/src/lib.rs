@@ -15,7 +15,8 @@
 //! Modules: [`error`] (the 21 contract codes), [`ipc_types`] (mirrored shapes),
 //! [`engine`] (spawn/supervise/terminate the sidecar), [`registry`] (GGUF metadata),
 //! [`admission`] (RAM refusal before allocation), [`net`] (loopback HTTP/1.1),
-//! [`inference`] (streaming + stop), [`system`] (the three OS numbers),
+//! [`inference`] (streaming + stop), [`kb`] (folder scan, index, monitor),
+//! [`system`] (the three OS numbers),
 //! [`dispatch`] (the contract router).
 
 pub mod admission;
@@ -24,6 +25,7 @@ pub mod engine;
 pub mod error;
 pub mod inference;
 pub mod ipc_types;
+pub mod kb;
 pub mod net;
 pub mod registry;
 pub mod system;

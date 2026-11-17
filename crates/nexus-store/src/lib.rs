@@ -16,6 +16,7 @@
 mod activity;
 mod admin;
 mod chat;
+pub mod kb;
 mod memory;
 mod settings;
 pub mod types;
@@ -29,9 +30,14 @@ use rusqlite::Connection;
 pub use types::*;
 
 /// Schema version of the migration set. `PRAGMA user_version` carries it.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
-const INIT_SQL: &str = include_str!("migrations/0001_init.sql");
+/// Numbered migrations, applied in order and recorded in `PRAGMA user_version`. A schema
+/// change is a new file, never an edit to an older one.
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, include_str!("migrations/0001_init.sql")),
+    (2, include_str!("migrations/0002_m3_knowledge.sql")),
+];
 
 /// Errors carry the dotted contract code so `nexus-core` can translate without guessing.
 #[derive(Debug, Clone, PartialEq)]
@@ -217,16 +223,21 @@ fn migrate(conn: &Connection) -> StoreResult<()> {
              open it with a newer NEXUS build or restore an older backup"
         )));
     }
-    if current == 0 {
+    for (version, sql) in MIGRATIONS {
+        if *version <= current {
+            continue;
+        }
         conn.execute_batch("BEGIN IMMEDIATE")?;
         let applied = conn
-            .execute_batch(INIT_SQL)
-            .and_then(|_| conn.pragma_update(None, "user_version", SCHEMA_VERSION));
+            .execute_batch(sql)
+            .and_then(|_| conn.pragma_update(None, "user_version", *version));
         match applied {
             Ok(()) => conn.execute_batch("COMMIT")?,
             Err(err) => {
                 let _ = conn.execute_batch("ROLLBACK");
-                return Err(StoreError::corrupt(format!("migration 0001 failed: {err}")));
+                return Err(StoreError::corrupt(format!(
+                    "migration {version:04} failed: {err}"
+                )));
             }
         }
     }

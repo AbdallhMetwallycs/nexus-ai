@@ -8,6 +8,7 @@ description = "NEXUS AI engine supervisor, model registry, RAM admission and inf
 
 [dependencies]
 nexus-store = { path = "../nexus-store" }
+nexus-kb = { path = "../nexus-kb" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

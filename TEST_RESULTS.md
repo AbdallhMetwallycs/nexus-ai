@@ -9,12 +9,105 @@ memory, tokens) live in `MEASUREMENTS.md`; this file records pass/fail and the e
 | Item | Value |
 | --- | --- |
 | Machine | owner laptop, Windows, 20.3 GB physical RAM, 3 physical cores |
-| Worktree | `D:\NEXUS-AI-m1`, branch `m1-first-answer` |
+| Worktree | `D:\NEXUS-AI-m1`, branch `m2-persistence` |
 | Rust | 1.99.1 MSVC, `cargo clippy` from the same toolchain |
 | Node | 24.17.0, npm with `vite` 5.4.21, `@tauri-apps/cli` 2.12.4 |
 | WebView2 | 157.0.4341.46 |
 | Engine | `D:\NEXUS-SIDECAR\b12189\llama-server.exe` (pinned b12189) |
 | Model | `D:\NEXUS-MODELS\Llama-3.2-3B-Instruct-Q4_K_M.gguf` (only authorised file) |
+
+---
+
+## 2026-11-17 — M3 knowledge and memory
+
+Worktree `D:\NEXUS-AI-m1`, branch `m2-persistence` (M3 commits on top of tagged `m2-persistence`).
+New crate `crates/nexus-kb` (parsers + chunking + local vectors), the `kb.*` and `memory.search`
+arms in `dispatch.rs`, retrieval injection and citations in `chat.send`, and the Knowledge / Chat
+honesty swap. The fixture tree the gate created (`.m3-gate-tree`, 201 files) was removed at the end
+of the run; `.m3-gate.json` (gitignored) is the machine-readable copy of the step list below.
+
+### 1. Crate tests
+
+```
+> cargo test -p nexus-kb -p nexus-store -p nexus-core
+     Running unittests src\lib.rs (target\debug\deps\nexus_core-2b89a9ddd6b873f1.exe)
+running 63 tests
+test result: ok. 63 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.47s
+     Running unittests src\lib.rs (target\debug\deps\nexus_kb-e3df756b8d740310.exe)
+running 10 tests
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+     Running unittests src\lib.rs (target\debug\deps\nexus_store-4a9eccc07559440f.exe)
+running 12 tests
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.93s
+```
+
+The `nexus-kb` tests include a corrupt-PDF fixture that yields a `failed` document instead of a
+panic, and chunk-boundary tests on multi-byte text. `nexus-core` includes
+`explicit_memory_requests_are_recognised_and_other_chatter_is_not` and
+`pending_memory_is_invisible_to_memory_search_until_approved`.
+
+### 2. Static gates
+
+```
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized] target(s) in 28.16s
+
+> npx tsc --noEmit
+tsc exit 0
+
+> npm run build
+dist/assets/index-CPdT3ZE-.js   455.79 kB │ gzip: 132.37 kB
+✓ built in 18.42s
+```
+
+### 3. Live gate — `node tools/m3-gate.mjs`
+
+Run against the real window (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9333"`)
+with the real model available. Exit code 0, 21/21 steps:
+
+| # | Step | Detail |
+| --- | --- | --- |
+| 1 | fixture tree written | 1 document + 200 bulk files under `D:\NEXUS-AI-m1\.m3-gate-tree` |
+| 2 | the page reaches the real core | `engine.status` answered |
+| 3 | `kb.watchRoot` accepted the folder | `D:\NEXUS-AI-m1\.m3-gate-tree` |
+| 4 | the dropped markdown file reached indexed with a real chunk count | `admission.md · indexed · 2 chunks` |
+| 5 | the whole tree was indexed | `total 201` |
+| 6 | `kb.search` returns the document with a citation | `admission.md §Admission` |
+| 7 | `kb.search` reports vectors as measured | `true` |
+| 8 | `kb.search` over 201 documents is sub-second | `26.50 ms` |
+| 9 | the watcher noticed the rename | `admission-renamed.md listed` |
+| 10 | the rename did not duplicate the document | `total 201` |
+| 11 | an installed model is available for the chat leg | `llama-3.2-3b-instruct-q4-k-m` |
+| 12 | `chat.create` wrote a conversation | `c-1794875056133-2736` |
+| 13 | `chat.send` answered and reported citations | `4 citations` |
+| 14 | the answer cites the indexed document | `admission-renamed.md §Admission, filler-013.md §Filler 13, filler-000.md §Filler 0, filler-001.md §Filler 1` |
+| 15 | the explicit request became a pending memory | `the cedar admission note says private memory is measured` |
+| 16 | the pending memory is not retrievable | `0 hits while pending` |
+| 17 | `memory.approve` accepted the decision | `approved` |
+| 18 | the approved memory is retrievable | `1 hits after approval` |
+| 19 | the Knowledge screen shows the live index | `document listed` |
+| 20 | the Knowledge screen no longer claims to be simulated | `demo notice absent` |
+| 21 | the Chat screen renders the citation chip for the answer | `Sources rendered` |
+
+Cleanup unwatched the root, deleted the indexed rows, removed the conversation and every memory the
+gate created, and deleted the fixture tree. The whole-tree search timing is a retrieval time
+measured in the page; the model was not regenerating during it.
+
+### 4. Defects the gate found, and what was fixed
+
+1. **Idempotent retry dropped citations.** A second `chat.send` with the same `clientId` returned
+   `{messageId}` only, so the gate saw "0 citations" from a message that *had* citations. Fixed in
+   `dispatch.rs`: the retry now reads `citations` back from the stored message
+   (`Store::message_citations`) and returns them.
+2. **Case-sensitive UI assertion.** The Sources label is CSS-uppercased, so `innerText` is
+   `SOURCES`; the gate's `/Sources/` test failed on a correct screen. The assertions are now
+   case-insensitive (`/sources/i`, `/index \(measured\)/i`).
+
+### 5. What this does not prove
+
+No OCR of scanned PDFs, no semantic embeddings (the vector component is a local hashed bag of
+words), no memory inference from ordinary conversation, and no multi-root load test. Those limits
+are recorded in `KNOWN_ISSUES.md` and `TECHNICAL_DEBT.md`.
 
 ---
 

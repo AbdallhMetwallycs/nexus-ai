@@ -1102,7 +1102,7 @@ function PrivacySection() {
           </ul>
           <p className="mt-2 text-2xs text-ink-faint">
             {live
-              ? 'Everything above is written to one SQLite file under %APPDATA%\\NexusAI on this machine. Knowledge Base documents arrive in M3.'
+              ? 'Everything above is written to one SQLite file under %APPDATA%\\NexusAI on this machine. Indexed Knowledge Base documents and their chunks live in the same file.'
               : 'In this prototype "local" means React state in your browser tab — nothing is persisted to disk.'}
           </p>
         </CardBody>
@@ -1431,7 +1431,7 @@ function AboutSection() {
       <Modal
         open={notesOpen}
         onClose={() => setNotesOpen(false)}
-        title={live ? 'Release notes — 0.1.0 (Phase 2, M2)' : 'Release notes — 0.1.0 (Phase 1)'}
+        title={live ? 'Release notes — 0.1.0 (Phase 2, M3)' : 'Release notes — 0.1.0 (Phase 1)'}
         subtitle={live ? 'What this build actually does' : 'Scope of the UI prototype'}
         size="md"
       >
@@ -1440,7 +1440,9 @@ function AboutSection() {
             <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Real local inference through the pinned llama-server sidecar; answers stream from this machine.</li>
             <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Conversations, messages, settings, activity and memory rows stored in SQLite under %APPDATA%\NexusAI.</li>
             <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Verified database backup, guarded restore, JSON export of owner data and a short-term-memory purge.</li>
-            <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-warn" /> Still simulated in this build: agent execution, knowledge indexing, tools, internet policy, learning lab, model downloads.</li>
+            <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> Watched folders are parsed locally (md, txt, csv, pdf, docx, xlsx) into a searchable index; chat answers cite what retrieval actually returned.</li>
+            <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-ok" /> An explicit "remember that …" request proposes a memory that stays invisible to retrieval until you approve it here.</li>
+            <li className="flex gap-2"><Check size={13} className="mt-0.5 shrink-0 text-state-warn" /> Still simulated in this build: agent execution, tools, internet policy, learning lab, model downloads.</li>
           </ul>
         ) : (
           <ul className="space-y-2 text-xs leading-relaxed text-ink-secondary">

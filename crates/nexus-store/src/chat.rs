@@ -217,7 +217,7 @@ impl Store {
     pub fn messages(&self, conversation_id: &str) -> StoreResult<Vec<ChatMessage>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, role, content, ts, model_id, agent_id, stopped,
-                    prompt_tokens, completion_tokens
+                    prompt_tokens, completion_tokens, citations
              FROM message WHERE conversation_id = ?1 ORDER BY ts ASC, rowid ASC",
         )?;
         let rows = stmt.query_map([conversation_id], |r| {
@@ -238,6 +238,9 @@ impl Store {
                     (Some(p), Some(c)) => Some(Usage { prompt: p as u64, completion: c as u64 }),
                     _ => None,
                 },
+                citations: r
+                    .get::<_, Option<String>>(9)?
+                    .and_then(|raw| serde_json::from_str(&raw).ok()),
             })
         })?;
         let mut out = Vec::new();
@@ -399,6 +402,33 @@ impl Store {
             .conn
             .query_row("SELECT id FROM message WHERE client_id = ?1", [client_id], |r| r.get(0))
             .optional()?)
+    }
+
+    /// Citations stored for a message, so an idempotent retry answers with the same
+    /// sources instead of silently dropping them.
+    pub fn message_citations(&self, message_id: &str) -> StoreResult<Option<serde_json::Value>> {
+        Ok(self
+            .conn
+            .query_row("SELECT citations FROM message WHERE id = ?1", [message_id], |r| {
+                r.get::<_, Option<String>>(0)
+            })
+            .optional()?
+            .flatten()
+            .and_then(|raw| serde_json::from_str(&raw).ok()))
+    }
+
+    /// Attach the citations an answer was grounded in. Absent is the honest value for an
+    /// answer that retrieved nothing.
+    pub fn set_message_citations(
+        &self,
+        message_id: &str,
+        citations: &serde_json::Value,
+    ) -> StoreResult<()> {
+        self.conn.execute(
+            "UPDATE message SET citations = ?2 WHERE id = ?1",
+            rusqlite::params![message_id, citations.to_string()],
+        )?;
+        Ok(())
     }
 
     /// Tokens from the last completed answer, for `chat.usage`.

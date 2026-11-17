@@ -341,6 +341,48 @@ the owner's choice, so `Core::from_env` restores the active model when the regis
 `ThemeProvider` reads `appearance.theme` on mount, and both write through `settings.patch`. If the
 read fails, the current value stays and nothing is claimed to have loaded.
 
+**D-043 — retrieval fuses SQLite FTS5 with a local hashed-vector cosine; no model is downloaded.**
+M3's scope says "embedding", but a real embedding model would mean a second model file and a new
+admission cost on a 20.3 GB laptop, and the offline rule forbids fetching one at runtime. Each
+chunk is therefore vectorised into 256 dimensions by hashing its tokens (FNV-1a, signed), stored as
+a little-endian `f32` BLOB in `kb_chunk.embedding`, and compared by cosine; the FTS5 `bm25` ranking
+is fused with it by reciprocal-rank fusion at `k = 60`. This is a lexical lift, not semantics: it
+helps when a query and a chunk share vocabulary in different orders, and it will not retrieve a
+paraphrase that shares no words. `kb.search` returns `measured: true` only when every stored chunk
+carries its vector, so the claim stays checkable. A real embedding backend is TD-20.
+
+**D-044 — the folder watcher polls every 2 s; it does not use OS file notifications.**
+`notify` would add a platform-specific dependency and a second failure surface for rename storm
+handling; a 2 s poll of a 200-document tree costs 26.50 ms per search and a directory walk that is
+far below the noise of model inference. Rename detection uses an FNV-1a fingerprint of `(size,
+first 4 KiB)` combined with the path: a path that disappears and a fingerprint that reappears at a
+new path is treated as a rename (the `kb_document` row keeps its id and chunks), and any other
+change re-parses the file. The fingerprint is change detection, not a security hash.
+
+**D-045 — a memory is proposed only on an explicit "remember …" request.** Inference-mining
+ordinary conversation would fill the approval queue with guesses and make the pending list
+untrustworthy. `chat.send` looks for an explicit prefix (English: "remember that", "remember:",
+"keep in mind that", "note that", "please remember"; Arabic: "تذكر أن", "تذكر:", "احفظ أن",
+"احفظ:") and stores exactly the remainder as a `pending` memory whose source is
+`conversation:<id>`. Pending rows are excluded from retrieval in SQL, so approving is the only way
+one can affect an answer; the gate proves it with 0 hits before and 1 after. Mining is future work,
+not a hidden behaviour.
+
+**D-046 — `kb.reindex` and `kb.watchRoot` are synchronous and record a finished job.**
+There is no job queue until M4's scheduler, and a command that returned a `jobId` for work that had
+not started would be the fake functionality the project forbids. Both commands do the scan inside
+the call, write the `job` row with its measured counts and `finished` state, and return that id;
+`kb.watchRoot` then starts the polling monitor. The cost is that a large first scan holds the core
+mutex for its duration (TD-19), which is honest but not yet acceptable for a multi-GB folder.
+
+**D-047 — M3 dependency fetches, recorded under rule 4.** `cargo` fetched these crates into
+`Cargo.lock` for `crates/nexus-kb`: `lopdf 0.35` (PDF text), `calamine 0.26` (xlsx),
+`csv 1.3` (csv), `zip =2.2.2` with `default-features = false, features = ["deflate"]` (docx
+containers; pinned because calamine's newer zip major changes the API), `quick-xml 0.37` (docx
+chapter/heading detection), and `tempfile 3` as a dev-dependency for parser fixtures. All are
+compile-time, run offline, and none is a network client. This is development-time fetching, which
+AGENTS.md rule 4 permits and requires recording; the application itself still downloads nothing.
+
 ## Deferred (explicitly not in Phase 1)
 
 LLM runtime (Ollama/llama.cpp), backend/API, databases, persistent memory,

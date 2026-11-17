@@ -62,6 +62,9 @@ pub struct Core {
     /// Where default backup, export and purge paths point. The Tauri host sets this to
     /// `%APPDATA%\NexusAI`; tests get the model folder.
     pub data_dir: PathBuf,
+    /// The polling folder monitor. `None` for the in-memory stores tests use, and while no
+    /// root is watched.
+    pub kb_monitor: Option<crate::kb::KbMonitor>,
 }
 
 impl Core {
@@ -83,6 +86,7 @@ impl Core {
             cancel: CancelFlag::new(),
             store,
             store_error,
+            kb_monitor: None,
         }
     }
 
@@ -134,6 +138,16 @@ impl Core {
                     core.active_model = Some(id);
                 }
             }
+        }
+        // The monitor opens its own connection to the same file, so it keeps watching
+        // folders while the UI is idle. An in-memory store has nothing to share.
+        if let Some(path) = core
+            .store
+            .as_ref()
+            .filter(|s| s.is_persistent())
+            .map(|s| s.path().to_path_buf())
+        {
+            core.kb_monitor = Some(crate::kb::KbMonitor::start(path));
         }
         core
     }
@@ -242,7 +256,12 @@ impl Core {
 
         if let Some(client_id) = client_id.as_deref() {
             if let Some(existing) = self.store()?.assistant_for_client_id(client_id)? {
-                return Ok(json!({ "messageId": existing }));
+                let citations = self
+                    .store
+                    .as_ref()
+                    .and_then(|store| store.message_citations(&existing).ok().flatten())
+                    .unwrap_or_else(|| Value::Array(Vec::new()));
+                return Ok(json!({ "messageId": existing, "citations": citations }));
             }
         }
 
@@ -285,6 +304,25 @@ impl Core {
             &now,
         )?;
 
+        // M3 memory service: an explicit “remember that …” becomes a pending memory.
+        // Pending rows are not retrievable until approved in Memory Center; ordinary
+        // conversation is never mined behind the owner's back.
+        if let Some(statement) = explicit_memory_statement(&content) {
+            let title: String = statement.chars().take(80).collect();
+            let source = format!("conversation:{conversation_id}");
+            if let Err(err) = self.store()?.create_memory(
+                "preference",
+                &title,
+                statement,
+                &source,
+                &[],
+                "pending",
+                &now,
+            ) {
+                eprintln!("NEXUS memory proposal was not stored: {err}");
+            }
+        }
+
         let model_id = match chosen_model {
             Some(model) => model,
             None => {
@@ -296,10 +334,61 @@ impl Core {
             }
         };
 
+        // Retrieval before generation: approved memory and indexed documents, both from
+        // the local database. A failure to retrieve is not a failure to answer — the
+        // question still goes to the engine without context, and citations stay empty.
+        let memories = self
+            .store
+            .as_ref()
+            .and_then(|store| store.retrieve_memories(&content, 5).ok())
+            .unwrap_or_default();
+        let read_hits = self
+            .store
+            .as_ref()
+            .and_then(|store| store.kb_search(&content, &[], 4).ok())
+            .map(|(hits, _)| hits)
+            .unwrap_or_default();
+        let citations: Value = Value::Array(
+            read_hits
+                .iter()
+                .map(|hit| {
+                    json!({
+                        "documentId": hit.document_id,
+                        "citation": hit.citation,
+                        "page": hit.page
+                    })
+                })
+                .collect(),
+        );
+        let mut system = String::from(inference::SYSTEM_PROMPT);
+        if !memories.is_empty() {
+            system.push_str(
+                "
+
+Approved owner memory, retrieved for this question. Treat it as                  background, not as the question:
+",
+            );
+            for memory in &memories {
+                system.push_str(&format!("- {}: {}
+", memory.title, memory.content));
+            }
+        }
+        if !read_hits.is_empty() {
+            system.push_str(
+                "
+
+Excerpts from the owner's indexed documents. When you use one, cite it                  exactly as given in square brackets. Do not invent a citation:
+",
+            );
+            for hit in &read_hits {
+                system.push_str(&format!("[{}] {}
+", hit.citation, hit.text));
+            }
+        }
+
         // Multi-turn: the whole conversation is sent, trimmed back from the newest turn.
         let history = self.store()?.messages(&conversation_id)?;
-        let mut turns =
-            vec![ChatTurn { role: "system", content: inference::SYSTEM_PROMPT.into() }];
+        let mut turns = vec![ChatTurn { role: "system", content: system }];
         for message in &history {
             match message.role.as_str() {
                 "user" => {
@@ -458,7 +547,12 @@ impl Core {
                 }),
             );
         }
-        Ok(json!({ "messageId": message_id }))
+        if !read_hits.is_empty() {
+            if let Err(err) = self.store()?.set_message_citations(&message_id, &citations) {
+                eprintln!("NEXUS citations were shown but not stored: {err}");
+            }
+        }
+        Ok(json!({ "messageId": message_id, "citations": citations }))
     }
 
     /// Data-or-error form, for hosts such as Tauri that carry the envelope themselves
@@ -840,6 +934,34 @@ impl Core {
                 to_json(&self.store()?.memory_history(&id)?)
             }
 
+            // What chat.send actually retrieves: approved rows only, in the same order.
+            // Pending or archived rows are absent here until the owner approves them.
+            "memory.search" => {
+                let query = required_str(args, "query")?;
+                let limit = optional_usize(args, "maxResults").unwrap_or(5);
+                let rows = self.store()?.retrieve_memories(&query, limit)?;
+                let items: Vec<Value> = rows
+                    .iter()
+                    .map(|m| {
+                        json!({
+                            "id": m.id,
+                            "tier": m.tier,
+                            "title": m.title,
+                            "content": m.content,
+                            "source": m.source,
+                            "tags": m.tags,
+                            "approval": "approved",
+                            "createdAt": m.created_at,
+                            "updatedAt": m.updated_at,
+                            "history": [],
+                            "score": m.score,
+                            "reason": "Approved memory whose text matched the query."
+                        })
+                    })
+                    .collect();
+                to_json(&json!({ "items": items, "measured": true }))
+            }
+
             "store.backup" => {
                 let info = self.store()?.backup(None, &now_iso8601())?;
                 self.log_activity(
@@ -898,6 +1020,206 @@ impl Core {
                 Ok(Value::Null)
             }
 
+            "kb.tree" => to_json(&self.store()?.kb_folders()?),
+
+            "kb.listDocuments" => {
+                let folder = optional_str(args, "folderId").filter(|f| !f.is_empty());
+                let collection = optional_str(args, "collection").filter(|c| !c.is_empty());
+                let types: Vec<String> = args
+                    .get("types")
+                    .and_then(Value::as_array)
+                    .map(|rows| rows.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                    .unwrap_or_default();
+                let query = optional_str(args, "query");
+                let limit = optional_usize(args, "limit").unwrap_or(100).clamp(1, 500);
+                let offset = optional_usize(args, "offset").unwrap_or(0);
+                let (items, total) = self.store()?.kb_list_documents(
+                    folder.as_deref(),
+                    collection.as_deref(),
+                    &types,
+                    query.as_deref(),
+                    limit,
+                    offset,
+                )?;
+                to_json(&Paged { items, total: count(total) })
+            }
+
+            "kb.watchRoot" => {
+                let (path, display) = canonical_dir(&required_str(args, "path")?)?;
+                let label = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| display.clone());
+                let now = now_iso8601();
+                let root = self.store()?.kb_add_root(&display, &label, &now)?;
+                let report = crate::kb::scan_root(self.store_mut()?, &root, &now)
+                    .map_err(NexusError::internal)?;
+                self.log_activity(
+                    "task",
+                    "Knowledge folder added",
+                    &format!(
+                        "{}: {} added, {} updated, {} renamed, {} removed, {} failed.",
+                        root.path,
+                        report.added,
+                        report.updated,
+                        report.renamed,
+                        report.removed,
+                        report.failed
+                    ),
+                    if report.failed > 0 { "warning" } else { "success" },
+                );
+                if self.kb_monitor.is_none() {
+                    if let Some(db) = self
+                        .store
+                        .as_ref()
+                        .filter(|s| s.is_persistent())
+                        .map(|s| s.path().to_path_buf())
+                    {
+                        self.kb_monitor = Some(crate::kb::KbMonitor::start(db));
+                    }
+                }
+                to_json(&json!({ "root": root.path, "label": root.label }))
+            }
+
+            "kb.unwatchRoot" => {
+                let (_, display) = canonical_dir(&required_str(args, "path")?)?;
+                let removed = self.store()?.kb_remove_root(&display)?;
+                if !removed {
+                    return Err(NexusError::validation(
+                        "path",
+                        format!("{display} is not a watched knowledge folder"),
+                    ));
+                }
+                let any = self.store()?.kb_roots()?.iter().any(|r| r.watching);
+                if !any {
+                    self.kb_monitor = None;
+                }
+                Ok(Value::Null)
+            }
+
+            "kb.reindex" => {
+                let id = required_str(args, "id")?;
+                let document = self.store()?.kb_document(&id)?;
+                let now = now_iso8601();
+                match crate::kb::index_file(
+                    self.store_mut()?,
+                    &id,
+                    Path::new(&document.path),
+                    &now,
+                ) {
+                    Ok(chunks) => {
+                        let job =
+                            self.store()?.record_finished_job("index", "success", &now, None)?;
+                        self.log_activity(
+                            "task",
+                            "Document re-indexed",
+                            &format!("{}: {chunks} chunks.", document.name),
+                            "success",
+                        );
+                        to_json(&json!({ "jobId": job }))
+                    }
+                    Err(err) => {
+                        let job = self.store()?.record_finished_job(
+                            "index",
+                            "failure",
+                            &now,
+                            Some(&err),
+                        )?;
+                        self.log_activity(
+                            "error",
+                            "Document could not be indexed",
+                            &format!("{}: {err}", document.name),
+                            "failure",
+                        );
+                        Err(NexusError::new(
+                            ErrorCode::Internal,
+                            format!("{} could not be indexed: {err}", document.name),
+                            false,
+                        )
+                        .with_detail(format!("job {job}")))
+                    }
+                }
+            }
+
+            "kb.deleteDocument" => {
+                let id = required_str(args, "id")?;
+                let document = self.store()?.kb_document(&id)?;
+                self.store()?.kb_delete_document(&id)?;
+                self.log_activity(
+                    "task",
+                    "Document removed from the index",
+                    &format!(
+                        "{} ({}). The file on disk was not touched.",
+                        document.name, document.path
+                    ),
+                    "success",
+                );
+                Ok(Value::Null)
+            }
+
+            "kb.moveDocument" => {
+                let id = required_str(args, "id")?;
+                let collection = required_str(args, "collection")?;
+                self.store()?.kb_move_document(&id, &collection)?;
+                Ok(Value::Null)
+            }
+
+            "kb.stats" => to_json(&self.store()?.kb_stats()?),
+
+            "kb.search" => {
+                let query = required_str(args, "query")?;
+                let collections: Vec<String> = args
+                    .get("collections")
+                    .and_then(Value::as_array)
+                    .map(|rows| rows.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                    .unwrap_or_default();
+                let max = optional_usize(args, "maxResults").unwrap_or(8);
+                let (items, measured) = self.store()?.kb_search(&query, &collections, max)?;
+                to_json(&json!({ "items": items, "measured": measured }))
+            }
+
+            "kb.ingestAttachment" => {
+                let paths: Vec<String> = args
+                    .get("paths")
+                    .and_then(Value::as_array)
+                    .map(|rows| rows.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                    .unwrap_or_default();
+                if paths.is_empty() {
+                    return Err(NexusError::validation("paths", "is required"));
+                }
+                let roots = self.store()?.kb_roots()?;
+                let mut scanned = 0usize;
+                for raw in &paths {
+                    let (path, _) = canonical_file(raw)?;
+                    let root = roots
+                        .iter()
+                        .find(|r| r.watching && path.starts_with(Path::new(&r.path)))
+                        .ok_or_else(|| {
+                            NexusError::new(
+                                ErrorCode::PolicyRootDenied,
+                                format!(
+                                    "{} is not inside a watched knowledge folder.",
+                                    path.display()
+                                ),
+                                false,
+                            )
+                        })?;
+                    let now = now_iso8601();
+                    crate::kb::scan_root(self.store_mut()?, root, &now)
+                        .map_err(NexusError::internal)?;
+                    scanned += 1;
+                }
+                let now = now_iso8601();
+                let job = self.store()?.record_finished_job("index", "success", &now, None)?;
+                self.log_activity(
+                    "task",
+                    "Attachments indexed",
+                    &format!("{scanned} path(s) scanned into the knowledge base."),
+                    "success",
+                );
+                to_json(&json!({ "jobId": job }))
+            }
+
             other => Err(NexusError::not_implemented(other)),
         }
     }
@@ -952,6 +1274,46 @@ fn optional_u32(args: &Value, key: &str) -> Option<u32> {
     args.get(key).and_then(Value::as_u64).map(|v| v as u32)
 }
 
+/// Accept a folder path from the UI and return (resolved path, display path). Windows
+/// canonical paths start with a `\\?\` prefix; it never belongs in the database or the UI,
+/// so it is stripped for display while the resolved path is what gets scanned.
+fn canonical_dir(raw: &str) -> CoreResult<(PathBuf, String)> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(NexusError::validation("path", "is required"));
+    }
+    let path = PathBuf::from(trimmed).canonicalize().map_err(|e| {
+        NexusError::validation("path", format!("{trimmed} could not be opened: {e}"))
+    })?;
+    if !path.is_dir() {
+        return Err(NexusError::validation(
+            "path",
+            format!("{trimmed} is not a folder"),
+        ));
+    }
+    let display = display_path(&path);
+    Ok((path, display))
+}
+
+fn canonical_file(raw: &str) -> CoreResult<(PathBuf, String)> {
+    let path = PathBuf::from(raw.trim()).canonicalize().map_err(|e| {
+        NexusError::validation("paths", format!("{raw} could not be opened: {e}"))
+    })?;
+    if !path.is_file() {
+        return Err(NexusError::validation(
+            "paths",
+            format!("{raw} is not a file"),
+        ));
+    }
+    let display = display_path(&path);
+    Ok((path, display))
+}
+
+fn display_path(path: &Path) -> String {
+    let text = path.to_string_lossy().into_owned();
+    text.strip_prefix(r"\\?\").map(str::to_owned).unwrap_or(text)
+}
+
 fn optional_str(args: &Value, key: &str) -> Option<String> {
     args.get(key)
         .and_then(Value::as_str)
@@ -975,6 +1337,35 @@ fn new_message_id(prefix: &str) -> String {
     format!("{prefix}-{}-{n}", now_iso8601().replace(':', ""))
 }
 
+/// Recognises an explicit request to keep a fact — “remember that …”. Deliberately
+/// literal: this build proposes a memory only when the owner asks for one, and the row
+/// lands pending, so retrieval cannot use it until it is approved.
+fn explicit_memory_statement(content: &str) -> Option<&str> {
+    const PREFIXES: &[&str] = &[
+        "please remember that ",
+        "please remember: ",
+        "remember that ",
+        "remember: ",
+        "keep in mind that ",
+        "note that ",
+        "تذكر أن ",
+        "تذكر: ",
+        "احفظ أن ",
+        "احفظ: ",
+    ];
+    let trimmed = content.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    for prefix in PREFIXES {
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            let statement = trimmed[trimmed.len() - rest.len()..].trim();
+            if statement.chars().count() >= 3 {
+                return Some(statement);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -987,6 +1378,149 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         (Core::new(&dir, dir.join("engine")), dir)
+    }
+
+    #[test]
+    fn watching_a_folder_indexes_a_markdown_file_and_a_rename_does_not_duplicate() {
+        let (mut core, dir) = core_with_tmp("kb-watch");
+        let notes = dir.join("notes");
+        std::fs::create_dir_all(&notes).unwrap();
+        std::fs::write(
+            notes.join("admission.md"),
+            "# Admission
+
+Admission is measured: private = 1495 MB + 0.1106 MB per token.
+",
+        )
+        .unwrap();
+        let mut sink = RecordingSink::default();
+        let path = notes.to_string_lossy().into_owned();
+
+        let watched = core
+            .execute("kb.watchRoot", &json!({ "path": path }), &mut sink)
+            .unwrap();
+        assert!(watched["root"].as_str().unwrap().ends_with("notes"));
+
+        let found = core
+            .execute(
+                "kb.search",
+                &json!({ "query": "admission private token" }),
+                &mut sink,
+            )
+            .unwrap();
+        let items = found["items"].as_array().unwrap();
+        assert!(!items.is_empty(), "the dropped file was not retrievable");
+        assert!(items[0]["citation"].as_str().unwrap().contains("§Admission"));
+        assert_eq!(found["measured"], true);
+
+        std::fs::rename(notes.join("admission.md"), notes.join("admission-renamed.md"))
+            .unwrap();
+        core.execute("kb.watchRoot", &json!({ "path": path }), &mut sink)
+            .unwrap();
+        let list = core
+            .execute("kb.listDocuments", &json!({}), &mut sink)
+            .unwrap();
+        assert_eq!(list["total"], 1, "the rename duplicated the row: {list}");
+        assert_eq!(list["items"][0]["name"], "admission-renamed.md");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_corrupt_pdf_is_listed_as_failed_and_never_panics_the_scan() {
+        let (mut core, dir) = core_with_tmp("kb-corrupt");
+        let docs = dir.join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("broken.pdf"), b"%PDF-1.7
+not really a pdf").unwrap();
+        std::fs::write(docs.join("good.md"), "# Good
+
+This note is readable.
+").unwrap();
+        let mut sink = RecordingSink::default();
+        core.execute(
+            "kb.watchRoot",
+            &json!({ "path": docs.to_string_lossy() }),
+            &mut sink,
+        )
+        .unwrap();
+        let list = core
+            .execute("kb.listDocuments", &json!({}), &mut sink)
+            .unwrap();
+        assert_eq!(list["total"], 2);
+        let failed = list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["name"] == "broken.pdf")
+            .expect("broken.pdf was not listed");
+        assert_eq!(failed["indexed"], "failed");
+        assert!(failed["lastError"].as_str().is_some());
+        let stats = core.execute("kb.stats", &json!({}), &mut sink).unwrap();
+        assert_eq!(stats["failed"], 1);
+        assert_eq!(stats["documents"], 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn explicit_memory_requests_are_recognised_and_other_chatter_is_not() {
+        assert_eq!(
+            explicit_memory_statement("remember that the office rent is due on the 5th"),
+            Some("the office rent is due on the 5th")
+        );
+        assert_eq!(
+            explicit_memory_statement("Please remember: never stop the engine mid-stream."),
+            Some("never stop the engine mid-stream.")
+        );
+        assert_eq!(
+            explicit_memory_statement("تذكر أن المشروع يستخدم Rust 2021"),
+            Some("المشروع يستخدم Rust 2021")
+        );
+        assert_eq!(explicit_memory_statement("remember:"), None);
+        assert_eq!(explicit_memory_statement("what is the rent?"), None);
+        // Retrieval must not treat its own injected memory block as a new proposal.
+        assert_eq!(explicit_memory_statement("Approved owner memory, retrieved"), None);
+    }
+
+    #[test]
+    fn pending_memory_is_invisible_to_memory_search_until_approved() {
+        let (mut core, dir) = core_with_tmp("mem-search");
+        let mut sink = RecordingSink::default();
+        let id = {
+            let store = core.store().unwrap();
+            store
+                .create_memory(
+                    "preference",
+                    "Gate phrase",
+                    "the gate phrase is cedar-42",
+                    "dispatch test",
+                    &[],
+                    "pending",
+                    &now_iso8601(),
+                )
+                .unwrap()
+                .id
+        };
+
+        let hidden = core
+            .execute("memory.search", &json!({ "query": "gate phrase" }), &mut sink)
+            .unwrap();
+        assert_eq!(
+            hidden["items"].as_array().unwrap().len(),
+            0,
+            "a pending memory was retrievable: {hidden}"
+        );
+
+        core.execute("memory.approve", &json!({ "id": id }), &mut sink)
+            .unwrap();
+        let found = core
+            .execute("memory.search", &json!({ "query": "gate phrase" }), &mut sink)
+            .unwrap();
+        let items = found["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1, "approved memory not retrieved: {found}");
+        assert_eq!(items[0]["id"], id);
+        assert_eq!(items[0]["approval"], "approved");
+        assert_eq!(found["measured"], true);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -20,6 +20,7 @@ import type {
   Approval,
   Attachment,
   ChatMessage,
+  Citation,
   Conversation,
   CustomSkill,
   IndexStatus,
@@ -44,6 +45,7 @@ import type { Telemetry } from '../data/hardware';
 export type {
   ActivityEvent,
   ActivityKind,
+  Citation,
   AgentDef,
   Approval,
   Attachment,
@@ -582,7 +584,7 @@ export interface CommandSpecs {
   'chat.setPinned': { args: { id: string; pinned: boolean }; res: void };
   'chat.delete': { args: { id: string }; res: void };
   'chat.clearMessages': { args: { id: string }; res: void };
-  'chat.send': { args: ChatSendInput; res: { messageId: string } };
+  'chat.send': { args: ChatSendInput; res: { messageId: string; citations?: Citation[] } };
   'chat.stop': { args: { conversationId: string }; res: void };
   'chat.regenerate': { args: ChatRegenerateInput; res: { messageId: string } };
   'chat.usage': { args: { conversationId: string }; res: UsageInfo };
