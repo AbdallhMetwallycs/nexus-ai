@@ -214,18 +214,53 @@ agent.run({ agentId, input, approvals? }): Result<{ jobId: string }>
 `agent.run` is the only entry point to execution; it always returns a job id, never a direct answer,
 because on this hardware everything that thinks takes queue time.
 
+**Implemented in M4.** The roster is two built-in rows seeded on first open — `universal` and
+`developer-agent` — plus whatever the owner creates. Built-ins refuse `agent.update` and
+`agent.delete` ("duplicate it to make a variant"). `agent.instructions` currently returns
+`{ current: [], raw }`: there is no instruction history table, so the core sends an empty array
+rather than inventing versions. `agent.run` accepts only the Developer Agent; any other agent
+returns `policy.not_allowed` naming this build's one runnable agent. The `input` is an explicit
+plan, one line per tool call:
+
+```
+fs.list <path>
+fs.read "<path>"
+fs.write <path> | <content>
+python.run | <code>
+powershell.run | <script>
+# comments and blank lines are ignored
+```
+
+An unknown verb fails with `validation.field` naming the line, and nothing is queued. Model-driven
+planning is M5; M4 does not pretend a 3B model planned the steps.
+
 ### 3.5 `tool.*`
 
 ```ts
 tool.list({ query?, category?, enabledOnly? }): Result<{ items: ToolDef[]; total: number }>
 tool.setEnabled(id, enabled):        Result<void>
 tool.testRun(id):                    Result<{ jobId: string }>
-tool.grants(id):                     Result<{ permissions: string[]; needsApproval: boolean }>
-tool.setGrant(id, permission, allowed): Result<void>
+tool.grants(id):                     Result<ToolGrantInfo>
+tool.setGrant(id, permission, scope): Result<void>
 skill.list():                        Result<{ items: CustomSkill[]; total: number }>
 skill.upsert(input):                 Result<CustomSkill>
 skill.delete(id):                    Result<void>
+
+interface ToolGrantInfo {
+  permissions: string[];
+  needsApproval: boolean;
+  standing: { permission: string; scope: 'once' | 'always' | 'never'; expiresAt?: string }[];
+}
 ```
+
+**Implemented in M4.** Five rows are seeded: `fs.list`, `fs.read` (no approval, permission
+`fs.read`), `fs.write` (`fs.write`), `python.run` and `powershell.run` (`process.exec`), all
+needing approval. A tool in `status: 'error'` cannot be re-enabled until its recorded fault is
+cleared; `set_tool_enabled` refuses. `tool.setGrant` refuses a permission the tool never declared
+(`policy.permission_undeclared`) and never creates grants for other permissions. `scope: 'never'`
+deletes the standing row. `tool.testRun` builds a one-step job from the tool's default test call —
+`fs.read` has none, because it needs a file the owner must choose; it returns
+`validation.field` instead of inventing a path. `skill.*` remains unimplemented.
 
 ### 3.6 `approval.*` — the pending-decision queue *(new domain; today it is inline UI state)*
 
@@ -247,6 +282,15 @@ interface PendingApproval {
 
 `scope: 'always'` is the only way to create a standing grant, and it must be visible in the Tools
 screen afterwards — a permanent permission that is invisible somewhere is worse than no permission.
+
+**Implemented in M4.** A tool call that needs approval creates a row bound to `args_hash`
+(FNV-1a of the tool id plus the canonical argument JSON), the job and the step. `approval.decide`
+refuses an already-decided row (`validation.field`) and, for an expired row, records `expired`
+rather than an approval. Approving releases the parked step; rejecting denies it and fails the job
+with a reason the Activity Center shows. `scope: 'always'` writes a standing grant for every
+permission the tool declared. The runner expires unanswered rows after 300 s and records that
+denial with its own activity row. An approval is consumed once (`used_at`), so replaying a call
+with the same arguments asks again unless a standing grant exists.
 
 ### 3.7 `memory.*`
 
@@ -369,6 +413,36 @@ store.purge(kind):                 Result<{ removed: number }>
 `system.profile` matters beyond the Dashboard: the Model Manager's fit badges must compute against
 the volume and RAM that actually exist, not the 512 GB figure in the Phase 1 mock.
 
+### 3.13 `job.*` — the execution queue *(added in M4)*
+
+```ts
+job.list({ limit? }):  Result<JobInfo[]>       // newest first, default 20, max 100
+job.get(id):           Result<JobInfo>         // includes steps
+
+interface JobInfo {
+  id: string; kind: JobKind; status: JobStatus; progressPct: number;
+  agentId?: string; modelId?: string; priority?: number;
+  createdAt: string; startedAt?: string; finishedAt?: string;
+  error?: string; output?: string; correlationId?: string;
+  steps: JobStep[];
+}
+
+interface JobStep {
+  idx: number; toolId: string; args: unknown;
+  status: 'pending' | 'awaiting_approval' | 'success' | 'failure' | 'denied';
+  output?: string; error?: string; correlationId?: string;
+  startedAt?: string; finishedAt?: string;
+}
+```
+
+One background thread (`nexus-job-runner`) owns a single execution slot over the `job` table.
+It claims the oldest queued job by priority then age, runs its steps in order, and parks a job
+back in `queued` while a step waits for approval, so a human decision never holds the slot.
+A job that needs a decision is therefore visible as `queued` with a step in `awaiting_approval`.
+Every start, tool result, denial and finish writes an `activity` row carrying the job's
+`correlationId`, which is what makes a multi-step task auditable end to end. There is no
+cancellation command in M4.
+
 ---
 
 ## 4. Event channels
@@ -400,7 +474,7 @@ ModelRecord        + { loaded?: boolean; actualRSSGB?: number; path?: string; sh
 ChatMessage        + { streaming?: boolean; stopped?: boolean; usage?: { prompt: number; completion: number } }
 Attachment         + { path?: string; parsed?: boolean }
 KbDocument         + { chunks?: number; lastError?: string }
-ToolDef            + { standingGrants?: string[] }
+ToolDef            + { lastError?: string | null }
 MemoryRecord       + { embedding?: 'stored' | 'none'; lastRetrievedAt?: string }
 ActivityEvent      + { jobId?: string; correlationId?: string }
 ```
@@ -428,12 +502,12 @@ the screen's `DemoNotice` come off in the same commit.
 | Chat | "Conversation removed from prototype state" | `chat.delete` |
 | Chat | "Conversation renamed" / "Conversation cleared (frontend state only)" | `chat.rename` / `chat.clearMessages` |
 | Chat | "(Simulated response — no model is running in this prototype.)" | removed when streaming is real |
-| Agents | "Agent created (prototype only)" / "updated" | `agent.create` / `agent.update` |
-| Agents | "Agent … enabled/disabled (prototype state only)" | `agent.setEnabled` |
-| Agents | "Duplicated as … (prototype only)" | `agent.duplicate` |
-| Tools | "… enabled/disabled (prototype state — nothing runs)" | `tool.setEnabled` |
-| Tools | "Simulated run completed — no real command executed" | `tool.testRun` → `job://state` |
-| Tools | "… has a simulated fault — enable/disable blocked / cannot run test" | real `ToolStatus.error` from the registry |
+| Agents | "Agent created (prototype only)" / "updated" | `agent.create` / `agent.update` — **replaced in M4** |
+| Agents | "Agent … enabled/disabled (prototype state only)" | `agent.setEnabled` — **replaced in M4** |
+| Agents | "Duplicated as … (prototype only)" | `agent.duplicate` — **replaced in M4** |
+| Tools | "… enabled/disabled (prototype state — nothing runs)" | `tool.setEnabled` — **replaced in M4** |
+| Tools | "Simulated run completed — no real command executed" | `tool.testRun` → `job.list` / `job.get` — **replaced in M4** |
+| Tools | "… has a simulated fault — enable/disable blocked / cannot run test" | real `ToolStatus.error` from the registry — **replaced in M4** |
 | Tools | "Skill stored in prototype state only" / "updated" / "removed" | `skill.upsert` / `skill.delete` |
 | Memory | "Memory updated (prototype only)" | `memory.update` |
 | Memory | "N pending memories approved (prototype only)" | `memory.approveAllPending` |

@@ -265,3 +265,38 @@ permission surface that M6 packaging has not designed yet.
 bridge; a dialog plugin is a second bridge.
 **Trigger.** Packaging (M6), or the first non-technical user of the Knowledge screen.
 **Verified-not-fixed:** `WatchFolderModal` accepts a path string only.
+
+## TD-23 — No cancellation path for a queued or running job
+
+**What.** The scheduler has no shared cancel flag and no `job.cancel` command; a step in
+`awaiting_approval` can only be resolved by deciding, and a running process is bounded only by the
+30 s timeout.
+**Why it exists.** M4's exit gate is about permissions and approvals; cancellation without a UI
+contract would have been a dead control, which the project forbids.
+**Trigger.** The first time a tool overruns and the owner asks to stop it, or before any tool whose
+timeout is longer than a minute. Then: a flag checked between steps and a terminate path in the
+process supervisor, plus a Stop control that says what it will kill.
+**Verified-not-fixed:** the Activity Center shows a running job but offers no stop button.
+
+## TD-24 — Approvals arrive only by polling
+
+**What.** The Activity Center reloads `approval.pending` when it mounts or a decision is made; there
+is no `approval://requested` event pushing the request into the UI, and no OS notification.
+**Why it exists.** The event bridge currently carries only `chat://token`, `chat://usage` and
+`model://state`; adding an approval event is a contract change that deserves its own review.
+**Trigger.** When a job can be started from a screen other than Agents, or the window is often
+minimised while the agent runs. Then: an `approval://pending` event plus a tray notification, with
+the menu item counting undecided requests.
+**Verified-not-fixed:** a pending approval is invisible to a screen that was not reloaded after the
+job parked.
+
+## TD-25 — The plan grammar is fixed and shallow
+
+**What.** The Developer Agent plan accepts five verbs (`fs.list`, `fs.read`, `fs.write`,
+`python.run`, `powershell.run`) with no variables, no output piping and no conditionals. A step
+cannot use the result of a previous step.
+**Why it exists.** M4 needed a deterministic, testable executor; a richer language would have been
+designed before any real task needed it.
+**Trigger.** The first task that needs "read this list, then act on each entry". Then: step outputs
+addressable by name, still executed one call per line and still gated.
+**Verified-not-fixed:** the gate's three-step plan passes a literal filename it was given.

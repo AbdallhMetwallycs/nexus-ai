@@ -6,6 +6,30 @@ evidence document named.
 
 ## [Unreleased]
 
+### Added — M4 tools, permissions and approvals (2026-11-17)
+
+- **`crates/nexus-policy`** (new, zero dependencies): `decide_tool` returns Allow /
+  RequireApproval / Deny for a declared tool, the declared permissions, standing grants and path
+  roots; `resolve_in_roots` contains a path inside a watched folder (including symlink escapes);
+  approvals hash the tool id plus canonical arguments and expire. Twelve tests: the ten policy
+  invariants, a symlink escape and an undeclared-permission case.
+- **Job runner**: one `nexus-job-runner` thread with its own store connection takes one job at a
+  time, records every step, parks a job back to `queued` while an approval is pending, and treats a
+  300 s expiry as a denial. Two jobs submitted together run in order, as the gate's timestamps show.
+- **Tool runtime**: `fs.list`/`fs.read`/`fs.write`, `python.run` and `powershell.run`, confined to
+  watched folders, with a 256 KiB read cap, 16 KiB captured output and a 30 s process timeout.
+- **Core router**: `agent.create|update|setEnabled|delete|list|get|assignModel|run` (ten),
+  `tool.list|setEnabled|testRun|grants|setGrant` (five), `approval.pending|decide|history` (three)
+  and `job.list|get` (two) — 70 commands now matched. The Developer Agent executes a documented
+  one-line-per-call plan; other agents answer `policy.not_allowed`.
+- **Screens**: Agents lists the stored roster, creates/edits/enables agents and runs a plan with
+  per-step status; Tools shows the live catalogue, real test runs, recorded errors and per-permission
+  grants; the Activity Center is a real log with the pending approval queue (Approve once / Always
+  allow / Reject) instead of a demo timeline. The Skills tab keeps a live-only notice that it is
+  still prototype state.
+- **`tools/m4-gate.mjs`**: 33-step live gate. Recorded 33/33 PASS, exit 0; evidence in
+  `TEST_RESULTS.md` §"2026-11-17 — M4 tools, permissions and approvals".
+
 ### Added — M3 knowledge and memory (2026-11-17)
 
 - **`crates/nexus-kb`**: local parsing (md, txt, csv, pdf via `lopdf`, docx via `zip` +

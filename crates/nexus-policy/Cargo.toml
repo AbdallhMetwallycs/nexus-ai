@@ -1,0 +1,7 @@
+[package]
+name = "nexus-policy"
+version = "0.1.0"
+edition = "2021"
+description = "The single policy gate for NEXUS AI: roots, tool execution, approvals, egress, memory and admission"
+
+[dependencies]

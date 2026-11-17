@@ -18,6 +18,122 @@ memory, tokens) live in `MEASUREMENTS.md`; this file records pass/fail and the e
 
 ---
 
+## 2026-11-17 — M4 tools, permissions and approvals
+
+Worktree `D:\NEXUS-AI-m1`, branch `m2-persistence` (M4 commits on top of tagged `m3-knowledge`).
+New crate `crates/nexus-policy` (the pure decision gate), the single-slot job runner
+(`crates/nexus-core/src/scheduler.rs`), the tool runtime (`crates/nexus-core/src/tools.rs`), the
+`agent.*` / `tool.*` / `approval.*` / `job.*` arms in `dispatch.rs`, migration `0003_m4_execution`,
+and the Agents / Tools / Activity live paths. The gate's fixture tree (`.m4-gate-tree`) was removed
+at the end of the run; `.m4-gate.json` (gitignored) is the machine-readable copy of the step list.
+
+### 1. Crate tests
+
+```
+> cargo test -p nexus-policy -p nexus-store -p nexus-core
+     Running unittests src\lib.rs (target\debug\deps\nexus_core-f337cca74ad6e86d.exe)
+test result: ok. 66 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.69s
+     Running tests\m4_execution.rs (target\debug\deps\m4_execution-3c9c5bae9651d9c1.exe)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.49s
+     Running unittests src\lib.rs (target\debug\deps\nexus_policy-ff26fc5ef4430a1d.exe)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running unittests src\lib.rs (target\debug\deps\nexus_store-da9d48845450ed22.exe)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.27s
+```
+
+`m4_execution` drives the real dispatcher and the real job thread against a temporary store and
+folder. It covers: a three-step task completing with every step and activity row under one
+correlation id; a rejection stopping the task with a visible reason and no partial write; a path
+outside the watched root denied by policy with no approval created; two simultaneous jobs being
+serialised; an Always-allow grant removing the second prompt; a Python tool running with the
+watched folder as its working directory; and an unknown plan line producing a named validation
+error that queues nothing. `nexus-policy` covers verdicts, root containment including symlink
+escape, argument hashing and approval expiry.
+
+### 2. Static gates
+
+```
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized] target(s) in 2.18s
+
+> npx tsc --noEmit
+tsc exit 0
+
+> npm run build
+dist/assets/index-BfvEiiBg.css    40.02 kB │ gzip:   9.97 kB
+dist/assets/index-Do9tr3Zc.js    466.96 kB │ gzip: 135.65 kB
+✓ built in 14.28s
+```
+
+### 3. Live gate — `node tools/m4-gate.mjs`
+
+Run against the real window (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9333"`,
+`npm run tauri dev`), exit code 0, 33/33 steps:
+
+| # | Step | Detail |
+| --- | --- | --- |
+| 1 | fixture tree written | `.m4-gate-tree\notes` plus a secret file outside it |
+| 2 | the page reaches the real core | `engine.status` answered |
+| 3 | the Developer Agent exists and is enabled | `Developer Agent` |
+| 4 | the catalogue marks `fs.write` approval-gated | `Write file · needsApproval=true` |
+| 5 | `kb.watchRoot` accepted the fixture as a tool root | `D:\NEXUS-AI-m1\.m4-gate-tree\notes` |
+| 6 | the write step asked before acting, in plain language | `Write 16 bytes to …\gate-one-1794892794126.txt` |
+| 7 | the job is parked in the queue while the decision waits | `queued / step awaiting_approval` |
+| 8 | `approval.decide` accepted the approval | `approved once` |
+| 9 | the three-step task completed | `success` |
+| 10 | `fs.read` returned what `fs.write` wrote | `{"bytes":16,"path":"\\?\D:\…\gate-one-…txt"}` |
+| 11 | every step carries the job correlation id | `corr-1794892794467-4` |
+| 12 | every activity row for the job carries the same correlation id | `9 rows` |
+| 13 | the log names the start, the tool calls and the finish | `Job finished · Read file · Write file · Job started · Approval granted · Approval requested · List folder · Agent task queued` |
+| 14 | `approval.decide` accepted the rejection | `rejected` |
+| 15 | the task stopped with a visible reason | `Approval rejected by the owner: … Nothing ran.` |
+| 16 | the denied step is marked and the second step never ran | `denied / pending` |
+| 17 | the rejected write left no file behind | absent on disk |
+| 18 | a path outside every watched folder is denied before any read | `… is outside every watched folder.` |
+| 19 | the denial is recorded as `policy.root_denied` | `Stopped before step 1 — policy.root_denied.` |
+| 20 | a traversal does not ask the owner; no approval was created | `0 before, 0 after` |
+| 21 | both queued jobs completed | `success / success` |
+| 22 | the single slot serialised them: one finished before the other started | `2026-11-17T05:19:55Z <= 2026-11-17T05:19:56Z` |
+| 23 | `job.list` shows the queue the Activity Center reads | `5 jobs` |
+| 24 | the Tools screen lists the live catalogue | `fs.write listed` |
+| 25 | the Tools screen no longer claims to be simulated | demo notice absent |
+| 26 | the Agents screen lists the stored roster | `Developer Agent listed` |
+| 27 | the Agents screen no longer claims to be mock definitions | demo notice absent |
+| 28 | the Activity Center shows the pending decision | `gate-ui-1794892794126.txt` |
+| 29 | the pending row expands to its decision controls | `opened` |
+| 30 | the Activity Center offers Approve once / Always allow / Reject | `always` |
+| 31 | the UI decision resumed and finished the job | `success` |
+| 32 | the approved write exists on disk | `…\gate-ui-1794892794126.txt` |
+| 33 | Always allow created a visible standing grant | `[{"permission":"fs.write","scope":"always"}]` |
+
+Cleanup unwatched the fixture folder and removed the tree. The two queued jobs in steps 21–22 were
+two `fs.list` plans submitted back to back; their timestamps show the second started after the first
+finished, which is the one-slot behaviour.
+
+### 4. Defects found and fixed during M4
+
+1. **The traversal test pointed at the wrong path.** `fs.read ../outside.txt` resolves to a sibling
+   *inside* the temporary root, so it proved nothing. The test and the gate now plan an absolute
+   path outside every root; the gate asserts the denial text, the `policy.root_denied` activity row
+   and that no approval was created.
+2. **`AgentCreateInput` did not match the payload the screen builds.** The contract required
+   `icon`/`builtIn` that `agent.create` never read, and omits fields the screen sends. The interface
+   now marks role/description/capabilities/modelId/icon optional and adds `enabled`; `agent.update`
+   still ignores `modelId`, so the screen follows it with `agent.assignModel`.
+3. **`JobInfo.steps` was optional** although every job row returns an array; it is now required so
+   the screen can iterate without a guard.
+
+The live gate itself passed on its first complete run.
+
+### 5. What this does not prove
+
+No model planning (the Developer Agent executes an explicit plan; planning is M5), no cancellation
+of a running job, only one runnable agent, approvals keyed on a canonical arguments string rather
+than semantic intent, and `skill.*` remains prototype state behind its own notice. Those limits are
+recorded in `KNOWN_ISSUES.md` and `TECHNICAL_DEBT.md`.
+
+---
+
 ## 2026-11-17 — M3 knowledge and memory
 
 Worktree `D:\NEXUS-AI-m1`, branch `m2-persistence` (M3 commits on top of tagged `m2-persistence`).

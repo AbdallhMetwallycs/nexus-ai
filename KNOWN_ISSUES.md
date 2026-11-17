@@ -219,3 +219,39 @@ wait.
 cancellable.
 **Workaround:** watch a small folder first; re-index single documents.
 **Target:** TD-19 (background scan outside the core mutex).
+
+## KI-19 — The Developer Agent cannot plan; it executes a script
+
+**What.** `developer-agent` accepts an explicit one-line-per-call plan (D-051). Ask it in prose and
+it answers `validation.field` naming the unrecognised line. No model is involved in choosing tools
+or steps.
+**Impact.** The screen's "Run a plan" panel is a task runner, not an assistant. The other seeded
+agents refuse to run (`policy.not_allowed`).
+**Workaround:** write the steps in the documented plan syntax.
+**Target:** M5 (model planning that proposes the plan, still approval-gated).
+
+## KI-20 — A running job cannot be cancelled
+
+**What.** There is no `job.cancel`. A long `python.run` occupies the single slot until it finishes or
+hits the 30 s timeout, and the UI has no stop control for it.
+**Impact.** One runaway tool delays every queued job; the owner can only wait or close the app.
+**Workaround:** keep scripts short; rely on the timeout.
+**Target:** TD-23 (a cancel flag checked between steps and passed into the process supervisor).
+
+## KI-21 — Approvals bind to an argument string, not to intent
+
+**What.** The approval hash covers the tool id and a canonical serialisation of the arguments
+(D-050). Two calls that mean the same thing but differ in whitespace inside a `fs.write` content
+body are different approvals; an argument that the tool ignores still changes the hash.
+**Impact.** Occasionally the owner is asked twice for what looks like the same action; conversely
+an approval is never silently reused for different arguments.
+**Workaround:** choose Always allow for an operation you will repeat.
+**Target:** not scheduled; the conservative direction is deliberate.
+
+## KI-22 — Skills remain prototype state
+
+**What.** The Tools & Skills screen's Skills tab still shows seeded skills and states so, under a
+live-only `DemoNotice`; `skill.*` commands are not implemented.
+**Impact.** Only the Tools tab reflects real state. A skill row cannot be run.
+**Workaround:** none needed; the notice is explicit.
+**Target:** M5 (instruction versions) or later.

@@ -129,6 +129,8 @@ export interface ToolDef {
   status: ToolStatus;
   version: string;
   lastRun: string | null;
+  /** Recorded by the core when the last run failed (M4). */
+  lastError?: string | null;
 }
 
 export interface CustomSkill {

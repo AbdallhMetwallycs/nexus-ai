@@ -383,6 +383,44 @@ chapter/heading detection), and `tempfile 3` as a dev-dependency for parser fixt
 compile-time, run offline, and none is a network client. This is development-time fetching, which
 AGENTS.md rule 4 permits and requires recording; the application itself still downloads nothing.
 
+**D-048 — one pure crate decides, and it is consulted at the moment of effect.** `crates/nexus-policy`
+has no dependencies and no I/O: `decide_tool` answers `Allow`, `RequireApproval` or `Deny(code)` from
+the tool declaration, the declared permissions, the standing grants, the pending approvals and the
+path roots. The scheduler calls it immediately before each step *and* the tool runtime calls
+`resolve_in_roots` again before touching the filesystem. A check that ran when the plan was queued
+would be a check against a world that has since changed (a root removed, an app disabled, an
+approval expired). Keeping the decision pure also makes the ten policy invariants cheap to test
+without a store, a process or a window.
+
+**D-049 — one execution slot, and a waiting approval frees it.** `nexus-job-runner` is a single
+background thread with its own `Store` connection (SQLite WAL readers do not block). It claims one
+queued job, runs its steps, and when a step needs a decision it records the approval, marks the step
+`awaiting_approval` and puts the job back to `queued` — otherwise one person's unanswered prompt
+would block every other job indefinitely. Claim order is priority then age, so a re-queued job is not
+punished for the time it spent waiting. The gate proves serialisation with two plans whose
+timestamps show the second started after the first finished. A 300 s expiry is recorded as a denial,
+because "no answer" must never mean "yes".
+
+**D-050 — an approval is bound to one argument set and consumed on use.** The hash is FNV-1a over
+the tool id plus a canonical JSON serialisation of the arguments (sorted keys, no whitespace). The
+approval stores that hash, and `approval_matches` refuses an approval whose hash differs, so
+approving "write these 16 bytes to this file" cannot authorise a different write. `used_at` is set
+on release, so a second identical call asks again. "Always allow" is the explicit escape: it writes
+a standing grant for the declared permission, which the Tools details dialog shows and which
+`tool.setGrant(..., 'never')` removes. Standing grants are per permission, not per argument set —
+that is what the owner asked for by choosing Always.
+
+**D-051 — the Developer Agent executes a plan; it does not plan yet.** The M4 agent takes a short
+line-per-call plan (`fs.list <path>`, `fs.read <path>`, `fs.write <path> | <content>`, `python.run |`
+and `powershell.run |` with the rest of the line as the script, `#` comments) and rejects an unknown
+verb with `validation.field` naming the line before queueing anything. Calling a model to invent the
+plan is M5's learning loop and would have made M4's exit gate untestable and non-deterministic. Only
+`developer-agent` is runnable; any other agent returns `policy.not_allowed` rather than pretending.
+
+**D-052 — M4 added no external dependency.** The only `Cargo.lock` change is the new workspace member
+`nexus-policy` (version 0.1.0); no third-party crate was fetched. Nothing in M4 reaches the network,
+and the gate's tools run only Python and PowerShell already present on the machine.
+
 ## Deferred (explicitly not in Phase 1)
 
 LLM runtime (Ollama/llama.cpp), backend/API, databases, persistent memory,

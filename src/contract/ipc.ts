@@ -141,6 +141,19 @@ export type JobKind =
 
 export type JobStatus = 'queued' | 'running' | 'success' | 'failure' | 'cancelled' | 'timeout';
 
+/** One tool call inside a job, as the runner recorded it (M4). */
+export interface JobStep {
+  idx: number;
+  toolId: string;
+  args: unknown;
+  status: 'pending' | 'awaiting_approval' | 'success' | 'failure' | 'denied';
+  output?: string;
+  error?: string;
+  correlationId?: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
 export interface JobInfo {
   id: string;
   kind: JobKind;
@@ -149,11 +162,15 @@ export interface JobInfo {
   message?: string;
   agentId?: string;
   modelId?: string;
+  priority?: number;
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
   error?: string;
+  output?: string;
   correlationId?: string;
+  /** Present on `job.get` and `job.list` since M4; empty for jobs with no steps. */
+  steps: JobStep[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -265,13 +282,14 @@ export interface UsageInfo {
 
 export interface AgentCreateInput {
   name: string;
-  role: string;
-  description: string;
-  capabilities: string[];
-  modelId: string;
+  role?: string;
+  description?: string;
+  capabilities?: string[];
+  modelId?: string;
   instructions: string;
-  icon: string;
-  builtIn?: false;
+  icon?: string;
+  /** M4: applied with a follow-up `agent.setEnabled`; the create itself always starts enabled. */
+  enabled?: boolean;
 }
 
 export interface AgentInstructions {
@@ -615,6 +633,10 @@ export interface CommandSpecs {
   'approval.pending': { args: undefined; res: PendingApproval[] };
   'approval.decide': { args: ApprovalDecisionInput; res: void };
   'approval.history': { args: { limit?: number }; res: ActivityEvent[] };
+
+  // jobs (M4: the single execution slot)
+  'job.list': { args: { limit?: number }; res: JobInfo[] };
+  'job.get': { args: { id: string }; res: JobInfo };
 
   // memory
   'memory.list': { args: MemoryListQuery; res: Paged<MemoryRecord> };

@@ -335,7 +335,7 @@ the Document Analyst agent screen remains M4 because no tool loop exists yet.
 
 ---
 
-### M4 — Tools and one working agent
+### M4 — Tools and one working agent — **DONE 2026-11-17**
 
 **Scope:** tool registry with declared permissions, approval queue, filesystem + Python +
 PowerShell tool families, job scheduler with the single execution slot, Developer Agent completing a
@@ -352,6 +352,25 @@ cargo test && npm run build           → green
 ```
 **Honesty swap:** Tools & Skills banner comes off; "Simulated run completed" is replaced by real
 output; the Activity Center becomes a true log rather than a demo timeline.
+
+**Result (2026-11-17):** all six gate lines ran against the real window (`tools/m4-gate.mjs`,
+33/33 steps PASS, exit 0; evidence in `TEST_RESULTS.md` §"2026-11-17 — M4 tools, permissions and
+approvals"). `nexus-policy` passes the ten invariants plus a symlink-escape and an undeclared-
+permission case (12/0). A three-step Developer Agent task completed after the owner approved the
+write, every step and all nine activity rows carried one `correlationId`, and `fs.read` returned the
+bytes `fs.write` had just written. Rejecting an approval stopped the task with
+`Approval rejected by the owner: … Nothing ran.`, marked the step `denied`, left the next step
+`pending` and wrote no file. An absolute path outside every watched folder was refused with
+`policy.root_denied` and created no approval. Two jobs submitted together ran in order
+(`05:19:55Z <= 05:19:56Z`). In the UI, the Activity Center listed the pending decision, offered
+Approve once / Always allow / Reject, resumed the job on approval and then showed the created file;
+Always allow produced a visible `fs.write / always` grant. `cargo test -p nexus-policy -p
+nexus-store -p nexus-core` 66/0 + 7/0 + 12/0 + 12/0, clippy clean, `npx tsc --noEmit` and
+`npm run build` exit 0. Tagged `m4-tools`.
+
+The honest limits: the Developer Agent executes an explicit one-line-per-call plan, not model
+planning (M5); only `developer-agent` can run; there is no job cancellation; approvals bind to a
+canonical argument string. `skill.*` remains prototype state behind its own notice.
 
 ---
 

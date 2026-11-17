@@ -76,3 +76,33 @@ no demo notice; the Chat screen paints a Sources row.
 It writes `.m3-gate.json` (gitignored), deletes every row and memory it created, unwatches the
 root and removes the fixture tree. Env: `NEXUS_CDP_PORT`, `NEXUS_GATE_OUT`. Exit 0 means every
 step passed; the JSON is written on failure too.
+
+
+## m4-gate.mjs — tools, permissions and approvals evidence (M4)
+
+Runs in one launch against the real window; no model is loaded. It writes a fixture folder
+(`.m4-gate-tree/notes` plus a secret file under `.m4-gate-tree/outside/`), watches the notes folder,
+and drives the real tool pipeline:
+
+```powershell
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9333"
+npm run tauri dev
+node tools/m4-gate.mjs
+```
+
+What it asserts, in order: the page reaches the real core and the Developer Agent is enabled;
+`fs.write` is declared approval-gated and `kb.watchRoot` accepts the fixture; a three-step plan
+(`fs.list`, `fs.write`, `fs.read`) parks at the write with a plain-language summary and the job
+shows `queued / awaiting_approval`; approving once completes the task, `fs.read` returns the bytes
+written, and the three steps plus all nine activity rows share one correlation id and the log names
+start, tools and finish; rejecting a second plan stops it with `Nothing ran.`, marks the step
+`denied`, leaves the next `pending` and writes no file; an absolute path outside every root is
+denied as `policy.root_denied` without creating an approval; two queued `fs.list` jobs run in order
+and appear in `job.list`; the Tools and Agents screens show live data with no demo notice; the
+Activity Center lists the pending decision, expands it, offers Approve once / Always allow / Reject,
+resumes the job from the UI, and the file exists afterwards; Always allow leaves a visible
+`fs.write / always` standing grant.
+
+It writes `.m4-gate.json` (gitignored), unwatches the folder and removes the fixture tree. Env:
+`NEXUS_CDP_PORT`, `NEXUS_GATE_OUT`. Exit 0 means every step passed; the JSON is written on failure
+too.

@@ -1,6 +1,6 @@
 # IMPLEMENTATION_STATUS.md — NEXUS AI
 
-**Status of record for Phase 2 M3 (2026-11-17).** One row per screen. "Backed by" names the
+**Status of record for Phase 2 M4 (2026-11-17).** One row per screen. "Backed by" names the
 IPC command(s) the screen actually calls, verified by reading `src/pages/*.tsx`,
 `src/state/PlatformContext.tsx`, `src/theme/ThemeContext.tsx` and the `match` in
 `crates/nexus-core/src/dispatch.rs`. A command listed in `src/contract/ipc.ts` but not matched
@@ -17,19 +17,19 @@ Definitions:
 | --- | --- | --- | --- | --- |
 | **Dashboard** | partial | `model.list` (via `PlatformContext` → `useActiveModel`) | The active-model card shows the real registry record (name, quantization, context window, RAM estimate, size), and the welcome copy now says so when a core is attached. | Telemetry and sparklines are deterministic mock data; recent conversations/activity/agents are `MOCK_*`. No `system.telemetry` call. |
 | **Chat** | real | `model.list`, `chat.list`, `chat.get`, `chat.create`, `chat.rename`, `chat.setPinned`, `chat.delete`, `chat.clearMessages`, `chat.send`, `chat.stop`, `chat.usage`, `engine.loadModel`, `engine.status`; `settings.get` for the remembered model; events `chat://token`, `chat://usage` | Conversations and every message are written to and read from the local database. A prompt streams real tokens; the assembled prompt includes the stored history, trimmed by the measured budget; `chat.stop` survives model load and stores the partial answer with `stopped = true` and no token counts; crash recovery is unchanged. The usage rail reads `chat.usage` (`measured` true only when a stored usage row exists). Before generating, the core retrieves approved memories and the top-indexed chunks and the answer's Sources row shows the citations it actually retrieved. | `chat.regenerate` still refuses in live mode. Attachments are stored as sent, not parsed as chat attachments (the knowledge pipeline is separate). |
-| **Agents** | demo | none (`agent.*` returns `not_implemented`) | Nothing. Agent definitions are mock records; create/edit/enable/duplicate write React state. | All of it. `DemoNotice`: "no agent process exists in Phase 1." |
+| **Agents** | real | `agent.list`, `agent.get`, `agent.create`, `agent.update`, `agent.setEnabled`, `agent.duplicate`, `agent.delete`, `agent.assignModel`, `agent.instructions`, `agent.run`; `model.list` for the assignment picker; `job.get` while a task runs | The roster is read from and written to the `agents` table: create, edit, enable/disable, duplicate, delete and model assignment. The Developer Agent runs an explicit plan (one line per tool call) as a real job; the details dialog polls `job.get` and shows each step, its status, its output/error and the reason a task stopped. Built-in agents refuse edit/delete, and the UI hides those actions instead of offering a failing button. | Model-driven planning is M5; only `developer-agent` executes, and any other agent returns `policy.not_allowed` naming the one runnable agent. `agent.instructions` returns an empty history list rather than invented versions. |
 | **Model Manager** | partial | `model.list` (`PlatformContext`), `engine.loadModel`; core also has `model.get`, `model.verify`, `model.remove`, `model.setActive`, `engine.unloadModel`, `engine.measuredFit` | The Installed tab lists real GGUF files read from `NEXUS_MODELS_DIR`; "Set active" loads through measured admission; the loaded model id is saved as `models.active` and restored on the next launch. | Catalog rows, compatibility verdicts, compare and download are `MOCK_MODELS` behind a `DemoNotice`. Live catalog rows cannot be made active. |
 | **Memory Center** | partial | `memory.list`, `memory.get`, `memory.update`, `memory.approve`, `memory.reject`, `memory.approveAllPending`, `memory.delete`, `memory.history`, `memory.search` | The list, edit, approve/reject, approve-all, delete (archive) and the history timeline all read and write the `memory` / `memory_history` tables. An explicit "remember that …" request in chat now proposes a `pending` memory, which the owner approves here before retrieval can see it. | Nothing on this screen *creates* a memory — capture is a chat-side proposal by design — and the status counts still describe only the rows on screen. |
 | **Knowledge Base** | real | `kb.tree`, `kb.listDocuments`, `kb.stats`, `kb.watchRoot`, `kb.unwatchRoot`, `kb.reindex`, `kb.deleteDocument`, `kb.moveDocument`, `kb.search` | A typed folder path is scanned and watched; md, txt, csv, pdf, docx and xlsx are parsed, chunked and stored in SQLite with FTS5 + local vector retrieval. The screen lists the real index, shows measured storage and chunk counts, re-indexes from disk, moves and removes entries (removal does not touch the file on disk), and previews what retrieval actually holds. | There is no folder picker (the path is typed), no page-image rendering in preview, and the collection tree is flat until folders get their own semantics. |
-| **Tools & Skills** | demo | none (`tool.*`, `skill.*` return `not_implemented`) | Nothing. Tool status, permissions, enable/disable and the skill builder are React state. | All of it. `DemoNotice`: "no commands are executed." |
+| **Tools & Skills** | partial | `tool.list`, `tool.setEnabled`, `tool.testRun`, `tool.grants`, `tool.setGrant` | The catalogue is the seeded five-tool set read from the database; enable/disable and test runs are real, a test run becomes a job (and waits for approval when the tool requires it), and the details dialog shows and edits the standing grant per declared permission. A tool in an error state cannot be re-enabled. | `skill.*` is still unimplemented: the Custom Skills tab is React state behind its own `DemoNotice`, and creating a skill changes nothing on disk. |
 | **Learning Lab** | demo | none (`learning.*` return `not_implemented`) | Nothing. Corrections, suggestions and instruction versions are mock data. | All of it. `DemoNotice`: "All events, suggestions and version changes are simulated prototype state." |
 | **Internet Center** | demo | none (`net.*` returns `not_implemented`) | The offline/online flag itself is UI state; no network stack exists. | Permissions, trusted sources, per-agent grants and update history are mock data. `DemoNotice`: "No network stack is wired to this UI." |
-| **Activity Center** | real | `activity.list`, `activity.get`, `activity.export` | The timeline is read from the `activity` table the core writes (model loads, sends, stops, backups, restores, purges, exports). Export writes a JSON file and reports its path. | The two pending-approval rows are mock prompts; `activity.*` has no approval decision command, so the buttons say nothing was changed. |
+| **Activity Center** | real | `activity.list`, `activity.get`, `activity.export`, `approval.pending`, `approval.decide`, `approval.history` | The timeline is read from the `activity` table the core writes, including every job start, tool call, denial and finish with its `correlationId`. The queue row for each undecided approval is real and carries its approval id; Approve once / Always allow / Reject call `approval.decide` and then re-read both tables. An expired request is recorded as a denial by the runner. | `activity.get` is implemented but the screen does not open a single record; export still covers the activity table only. |
 | **Settings** | partial | `settings.get`, `settings.patch`, `store.backup`, `store.backups`, `store.restore`, `store.export`, `store.purge` | Saving a section writes the values to the `settings` table and the section reloads them on mount; the theme is written as `appearance.theme` and re-applied at startup. Backups are real verified copies listed from `backup_record`; Restore runs the core's guarded restore; "Export my data" writes owner data as JSON; the memory danger zone purges short-tier rows and reports rows/bytes removed. | Models default, Agents config, Internet policy, Learning Lab and Portability remain mock sections behind their own copy. The archive-folder input and the retention window are not wired (the purge uses the store's fixed windows). |
 
 ## Command surface actually implemented
 
-`crates/nexus-core/src/dispatch.rs` matches only these commands (54); everything else falls
+`crates/nexus-core/src/dispatch.rs` matches only these commands (70); everything else falls
 through to `NexusError::not_implemented` with the contract wording:
 
 - `engine.status`, `engine.start`, `engine.stop`, `engine.loadModel`, `engine.unloadModel`,
@@ -39,6 +39,11 @@ through to `NexusError::not_implemented` with the contract wording:
   `chat.setPinned`, `chat.delete`, `chat.clearMessages`, `chat.usage`
 - `settings.get`, `settings.patch`
 - `activity.list`, `activity.get`, `activity.export`, `activity.purge`
+- `agent.list`, `agent.get`, `agent.create`, `agent.update`, `agent.setEnabled`,
+  `agent.duplicate`, `agent.delete`, `agent.assignModel`, `agent.instructions`, `agent.run`
+- `tool.list`, `tool.setEnabled`, `tool.testRun`, `tool.grants`, `tool.setGrant`
+- `approval.pending`, `approval.decide`, `approval.history`
+- `job.list`, `job.get`
 - `memory.list`, `memory.get`, `memory.update`, `memory.approve`, `memory.reject`,
   `memory.approveAllPending`, `memory.delete`, `memory.history`, `memory.search`
 - `kb.tree`, `kb.listDocuments`, `kb.stats`, `kb.watchRoot`, `kb.unwatchRoot`, `kb.reindex`,
@@ -62,9 +67,23 @@ Implementation notes that matter for reading the table:
 5. `chat.send` retrieves before it generates: approved memories plus the top chunks are placed in
    the prompt, and the same citations are stored on the assistant message so `chat.get` and an
    idempotent retry return them too.
+6. `job.*` is backed by one background thread (`nexus-job-runner`) with its own SQLite connection.
+   It takes one queued job at a time; a job waiting for approval is put back in `queued`, so a
+   human decision never holds the slot and `job.get` shows it as `queued` with one step in
+   `awaiting_approval`.
+7. Tools may only touch the paths of watched Knowledge folders. The check runs in
+   `nexus_policy::resolve_in_roots` before any filesystem call and before an approval prompt, so a
+   traversal is a denial (`policy.root_denied`), never a question. Filesystem writes, Python and
+   PowerShell need approval; output is capped (256 KiB read, 16 KiB captured) and a process is
+   killed at 30 s with `timedOut: true`.
+8. An approval is bound to the tool id plus a canonical argument hash and is consumed on use. A
+   second identical call asks again unless the owner chose Always allow, which writes a standing
+   grant visible in the Tools details dialog. An unanswered request expires after 300 s and is
+   recorded as a denial.
 
 ## Verification
 
-Read on 2026-11-17 against branch `m2-persistence` (M3 commits). Behaviour claims are backed by
-`TEST_RESULTS.md` §"2026-11-17 — M3 knowledge and memory" and the gate JSON `.m3-gate.json`
-(gitignored, reproduced by `tools/m3-gate.mjs`), not by the fact that the screens render.
+Read on 2026-11-17 against branch `m2-persistence` (M4 commits). Behaviour claims are backed by
+`TEST_RESULTS.md` §"2026-11-17 — M4 tools, permissions and approvals", the seven integration tests
+in `crates/nexus-core/tests/m4_execution.rs`, and the gate JSON `.m4-gate.json` (gitignored,
+reproduced by `tools/m4-gate.mjs`), not by the fact that the screens render.

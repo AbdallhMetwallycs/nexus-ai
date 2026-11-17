@@ -28,6 +28,8 @@ pub mod ipc_types;
 pub mod kb;
 pub mod net;
 pub mod registry;
+pub mod scheduler;
+pub mod tools;
 pub mod system;
 
 /// The IPC contract version this build implements; the handshake compares it.

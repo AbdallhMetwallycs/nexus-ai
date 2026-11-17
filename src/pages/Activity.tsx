@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
-import {
+import { useEffect, useMemo, useState } from 'react';import {
   AlertTriangle,
   ChevronDown,
   ClipboardList,
@@ -27,7 +26,7 @@ import {
   type Tone,
 } from '../components/ui';
 import { ContextPanelCard, KeyValue, PageHeader, WorkArea } from '../components/common/PageChrome';
-import type { ActivityEvent as CoreActivityEvent } from '../contract/ipc';
+import type { ActivityEvent as CoreActivityEvent, PendingApproval } from '../contract/ipc';
 import { resolveTransport } from '../contract/client';
 import { MOCK_ACTIVITY } from '../data/activity';
 import { agentById } from '../data/agents';
@@ -127,6 +126,7 @@ export default function Activity() {
   const transport = useMemo(() => resolveTransport(), []);
   const live = transport.kind === 'tauri';
   const [events, setEvents] = useState<ActivityEvent[]>(live ? [] : ALL_EVENTS);
+  const [pending, setPending] = useState<PendingApproval[]>([]);
   const [loading, setLoading] = useState(live);
   const [filter, setFilter] = useState<FilterId>('all');
   const [search, setSearch] = useState('');
@@ -137,52 +137,108 @@ export default function Activity() {
     if (!live) return;
     let cancelled = false;
     void (async () => {
-      const listed = await transport.call('activity.list', { limit: 200 });
+      const [listed, waiting] = await Promise.all([
+        transport.call('activity.list', { limit: 200 }),
+        transport.call('approval.pending'),
+      ]);
       if (cancelled) return;
       setLoading(false);
       if (!listed.ok) {
         toast(`${listed.error.code}: ${listed.error.message}`, 'error');
-        return;
+      } else {
+        setEvents(
+          listed.data.items.map((e: CoreActivityEvent) => ({
+            id: e.id,
+            ts: e.ts,
+            kind: e.kind as ActivityKind,
+            title: e.title,
+            detail: e.detail,
+            agentId: e.agentId,
+            status: e.status,
+          })),
+        );
       }
-      setEvents(
-        listed.data.items.map((e: CoreActivityEvent) => ({
-          id: e.id,
-          ts: e.ts,
-          kind: e.kind as ActivityKind,
-          title: e.title,
-          detail: e.detail,
-          agentId: e.agentId,
-          status: e.status,
-        })),
-      );
+      if (waiting.ok) setPending(waiting.data);
     })();
     return () => {
       cancelled = true;
     };
   }, [live, transport, toast]);
 
+  /**
+   * What the timeline shows: recorded rows, plus one row per *decision still to make*.
+   * The recorded "Approval requested" rows are filtered out while their approval is
+   * still pending so the queue has exactly one row per decision, carrying its real id.
+   */
+  const rows = useMemo<ActivityEvent[]>(() => {
+    if (!live) return events;
+    const synthetic: ActivityEvent[] = pending.map((p) => ({
+      id: p.id,
+      ts: p.createdAt,
+      kind: 'approval',
+      title: `Approval requested: ${p.summary}`,
+      detail: p.detail ?? 'No further detail was recorded.',
+      agentId: p.requestedBy.agentId,
+      status: 'pending',
+    }));
+    return [
+      ...synthetic,
+      ...events.filter((e) => !(e.kind === 'approval' && e.status === 'pending')),
+    ];
+  }, [events, live, pending]);
+
   const counts = useMemo(() => {
-    const map: Record<string, number> = { all: events.length };
-    for (const e of events) map[e.kind] = (map[e.kind] ?? 0) + 1;
+    const map: Record<string, number> = { all: rows.length };
+    for (const e of rows) map[e.kind] = (map[e.kind] ?? 0) + 1;
     return map;
-  }, [events]);
+  }, [rows]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return events.filter((e) => {
+    return rows.filter((e) => {
       if (filter !== 'all' && e.kind !== filter) return false;
       if (!q) return true;
       return e.title.toLowerCase().includes(q) || e.detail.toLowerCase().includes(q);
     });
-  }, [events, filter, search]);
+  }, [rows, filter, search]);
 
   const filtersActive = filter !== 'all' || search.trim() !== '';
 
-  const decide = (id: string, approved: boolean) => {
+  const decide = async (id: string, approved: boolean, scope?: 'once' | 'always') => {
     if (live) {
+      const decided = await transport.call('approval.decide', {
+        id,
+        approved,
+        ...(approved ? { scope: scope ?? 'once' } : {}),
+      });
+      if (!decided.ok) {
+        toast(`${decided.error.code}: ${decided.error.message}`, 'error');
+        return;
+      }
+      // Re-read both tables: the decision is a recorded fact, not local state.
+      const [listed, waiting] = await Promise.all([
+        transport.call('activity.list', { limit: 200 }),
+        transport.call('approval.pending'),
+      ]);
+      if (listed.ok) {
+        setEvents(
+          listed.data.items.map((e: CoreActivityEvent) => ({
+            id: e.id,
+            ts: e.ts,
+            kind: e.kind as ActivityKind,
+            title: e.title,
+            detail: e.detail,
+            agentId: e.agentId,
+            status: e.status,
+          })),
+        );
+      }
+      if (waiting.ok) setPending(waiting.data);
       toast(
-        'Approval decisions have no core command yet; nothing was changed.',
-        'info',
+        approved
+          ? `Approved${scope === 'always' ? ' for every future call' : ' this once'}; the waiting job resumes.`
+          : 'Rejected; the job stopped and the reason is in its activity row.',
+        approved ? 'success' : 'warning',
       );
       return;
     }
@@ -197,12 +253,14 @@ export default function Activity() {
   };
 
   const today = {
-    tasks: events.filter((e) => e.kind === 'task').length,
-    tools: events.filter((e) => e.kind === 'tool').length,
-    errors: events.filter((e) => e.kind === 'error').length,
-    warnings: events.filter((e) => e.kind === 'warning').length,
+    tasks: rows.filter((e) => e.kind === 'task').length,
+    tools: rows.filter((e) => e.kind === 'tool').length,
+    errors: rows.filter((e) => e.kind === 'error').length,
+    warnings: rows.filter((e) => e.kind === 'warning').length,
   };
-  const failureRate = Math.round((events.filter((e) => e.status === 'failure').length / events.length) * 100);
+  const failureRate = Math.round(
+    (rows.filter((e) => e.status === 'failure').length / Math.max(1, rows.length)) * 100,
+  );
 
   return (
     <WorkArea
@@ -438,15 +496,24 @@ export default function Activity() {
                                 </pre>
                                 {e.kind === 'approval' && e.status === 'pending' && (
                                   <div className="mt-3 flex flex-wrap items-center gap-2">
-                                    <Button variant="primary" size="sm" onClick={() => decide(e.id, true)}>
-                                      Approve
+                                    <Button variant="primary" size="sm" onClick={() => void decide(e.id, true)}>
+                                      Approve once
                                     </Button>
-                                    <Button variant="danger" size="sm" onClick={() => decide(e.id, false)}>
+                                    {live && (
+                                      <Button
+                                        variant="secondary"
+                                        size="sm"
+                                        onClick={() => void decide(e.id, true, 'always')}
+                                      >
+                                        Always allow
+                                      </Button>
+                                    )}
+                                    <Button variant="danger" size="sm" onClick={() => void decide(e.id, false)}>
                                       Reject
                                     </Button>
                                     <span className="text-2xs text-ink-faint">
                                       {live
-                                        ? 'No approval command is implemented in this build; the buttons will report that and change nothing.'
+                                        ? 'Nothing runs until this is decided; an unanswered request expires after 5 minutes and counts as a denial.'
                                         : 'Decision updates this screen only — no action is performed.'}
                                     </span>
                                   </div>

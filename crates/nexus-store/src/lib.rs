@@ -14,11 +14,14 @@
 //!    preserving it, and refuses to run on a file that fails its own integrity check.
 
 mod activity;
+mod agents;
 mod admin;
 mod chat;
 pub mod kb;
+mod jobs;
 mod memory;
 mod settings;
+mod tools;
 pub mod types;
 
 use std::path::{Path, PathBuf};
@@ -27,16 +30,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
 
+pub use agents::{DEVELOPER_AGENT, UNIVERSAL_AGENT};
 pub use types::*;
 
 /// Schema version of the migration set. `PRAGMA user_version` carries it.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Numbered migrations, applied in order and recorded in `PRAGMA user_version`. A schema
 /// change is a new file, never an edit to an older one.
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("migrations/0001_init.sql")),
     (2, include_str!("migrations/0002_m3_knowledge.sql")),
+    (3, include_str!("migrations/0003_m4_execution.sql")),
 ];
 
 /// Errors carry the dotted contract code so `nexus-core` can translate without guessing.
@@ -211,6 +216,10 @@ impl Store {
              VALUES ('appearance', 'theme', '\"dark\"', 'json', 0, ?1)",
             [now],
         )?;
+        // M4: the built-in agent definitions and the tool catalogue. Both are INSERT OR
+        // IGNORE, so an owner's disable/grant survives every launch.
+        self.seed_runtime(now)?;
+        self.seed_tools(now)?;
         Ok(())
     }
 }
@@ -286,6 +295,22 @@ fn now_ms() -> u64 {
 /// Date arithmetic for purge cutoffs, without a calendar dependency.
 pub(crate) fn iso_days_ago(now_ms: u64, days: u64) -> String {
     iso8601_utc(now_ms.saturating_sub(days * 86_400_000))
+}
+
+/// A correlation id that ties an approval, its grant, the tool run and its result.
+pub fn correlation_id() -> String {
+    new_id("corr")
+}
+
+/// An ISO timestamp `seconds` from now, used for approval deadlines.
+pub fn now_iso_plus(seconds: i64) -> String {
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let base = i64::try_from(ms).unwrap_or(i64::MAX);
+    let shifted = base.saturating_add(seconds.saturating_mul(1000));
+    iso8601_utc(u64::try_from(shifted).unwrap_or(0))
 }
 
 pub(crate) fn new_id(prefix: &str) -> String {

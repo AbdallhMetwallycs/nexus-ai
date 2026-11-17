@@ -65,6 +65,9 @@ pub struct Core {
     /// The polling folder monitor. `None` for the in-memory stores tests use, and while no
     /// root is watched.
     pub kb_monitor: Option<crate::kb::KbMonitor>,
+    /// The single execution slot for jobs. `None` only on an in-memory store, where a
+    /// second connection cannot exist; commands that need it refuse with a clear error.
+    pub job_runner: Option<crate::scheduler::JobRunner>,
 }
 
 impl Core {
@@ -87,6 +90,7 @@ impl Core {
             store,
             store_error,
             kb_monitor: None,
+            job_runner: None,
         }
     }
 
@@ -94,6 +98,13 @@ impl Core {
     pub fn with_store(mut self, store: Store) -> Self {
         self.store = Some(store);
         self.store_error = None;
+        self
+    }
+
+    /// Attach the single execution slot to a file-backed store. Tests use this to run
+    /// `agent.run` end to end; the desktop shell gets it from [`Core::from_env`].
+    pub fn with_runner(mut self, db_path: impl Into<PathBuf>) -> Self {
+        self.job_runner = Some(crate::scheduler::JobRunner::start(db_path.into()));
         self
     }
 
@@ -124,6 +135,7 @@ impl Core {
             Ok(store) => {
                 core.store = Some(store);
                 core.store_error = None;
+                core.job_runner = Some(crate::scheduler::JobRunner::start(data.join("nexus.db")));
             }
             Err(err) => {
                 core.store = None;
@@ -962,6 +974,260 @@ Excerpts from the owner's indexed documents. When you use one, cite it          
                 to_json(&json!({ "items": items, "measured": true }))
             }
 
+            "agent.list" => {
+                let query = optional_str(args, "query");
+                let enabled_only = args.get("enabledOnly").and_then(Value::as_bool).unwrap_or(false);
+                let (items, total) = self.store()?.list_agents(query.as_deref(), enabled_only)?;
+                to_json(&Paged { items, total: count(total) })
+            }
+
+            "agent.get" => to_json(&self.store()?.get_agent(&required_str(args, "id")?)?),
+
+            "agent.create" => {
+                let name = required_str(args, "name")?;
+                let role = optional_str(args, "role").unwrap_or_default();
+                let description = optional_str(args, "description").unwrap_or_default();
+                let capabilities = args
+                    .get("capabilities")
+                    .cloned()
+                    .unwrap_or_else(|| Value::Array(Vec::new()));
+                let model = optional_str(args, "modelId").unwrap_or_default();
+                let instructions = optional_str(args, "instructions").unwrap_or_default();
+                let icon = optional_str(args, "icon").unwrap_or_else(|| "bot".to_owned());
+                let agent = self.store()?.create_agent(
+                    &name,
+                    &role,
+                    &description,
+                    &capabilities,
+                    &model,
+                    &instructions,
+                    &icon,
+                    &now_iso8601(),
+                )?;
+                to_json(&agent)
+            }
+
+            "agent.update" => {
+                let id = required_str(args, "id")?;
+                let patch = args.get("patch").cloned().unwrap_or_else(|| json!({}));
+                to_json(&self.store()?.update_agent(&id, &patch, &now_iso8601())?)
+            }
+
+            "agent.setEnabled" => {
+                let id = required_str(args, "id")?;
+                let enabled = args.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+                self.store()?.set_agent_enabled(&id, enabled, &now_iso8601())?;
+                Ok(Value::Null)
+            }
+
+            "agent.duplicate" => {
+                let id = required_str(args, "id")?;
+                to_json(&self.store()?.duplicate_agent(&id, &now_iso8601())?)
+            }
+
+            "agent.delete" => {
+                let id = required_str(args, "id")?;
+                self.store()?.delete_agent(&id)?;
+                Ok(Value::Null)
+            }
+
+            "agent.assignModel" => {
+                let id = required_str(args, "id")?;
+                let model = required_str(args, "modelId")?;
+                self.store()?.assign_agent_model(&id, &model, &now_iso8601())?;
+                Ok(Value::Null)
+            }
+
+            "agent.instructions" => {
+                let id = required_str(args, "id")?;
+                let (raw, current) = self.store()?.agent_instructions(&id)?;
+                to_json(&json!({ "current": current, "raw": raw }))
+            }
+
+            // The one runnable agent in M4: an explicit plan where one line is one tool
+            // call. Planning from the model is M5; pretending a 3B model planned this
+            // would be the fake functionality the project forbids.
+            "agent.run" => {
+                let agent_id = required_str(args, "agentId")?;
+                let input = required_str(args, "input")?;
+                let agent = self.store()?.get_agent(&agent_id)?;
+                if !agent.enabled {
+                    return Err(NexusError::new(
+                        ErrorCode::PolicyNotAllowed,
+                        format!("{} is disabled; enable it before running a task.", agent.name),
+                        false,
+                    ));
+                }
+                if agent.id != nexus_store::DEVELOPER_AGENT {
+                    return Err(NexusError::new(
+                        ErrorCode::PolicyNotAllowed,
+                        format!(
+                            "{} has no runner in this build; the Developer Agent is the one agent M4 executes.",
+                            agent.name
+                        ),
+                        false,
+                    ));
+                }
+                let steps = crate::tools::parse_plan(&input).map_err(|(line, message)| {
+                    NexusError::validation(
+                        "input",
+                        if line == 0 { message } else { format!("line {line}: {message}") },
+                    )
+                })?;
+                let now = now_iso8601();
+                let correlation = nexus_store::correlation_id();
+                let job_id = self.store()?.create_job(
+                    "agent_run",
+                    Some(&agent_id),
+                    None,
+                    3,
+                    &correlation,
+                    &now,
+                )?;
+                for (idx, step) in steps.iter().enumerate() {
+                    self.store()?.add_job_step(&job_id, idx as i64, step, &correlation)?;
+                }
+                self.store()?.record_activity(
+                    "task",
+                    "Agent task queued",
+                    &format!("{}: {} step(s) planned.", agent.name, steps.len()),
+                    Some(&agent_id),
+                    "pending",
+                    Some(&job_id),
+                    Some(&correlation),
+                    &now,
+                )?;
+                to_json(&json!({ "jobId": job_id }))
+            }
+
+            "tool.list" => {
+                let query = optional_str(args, "query");
+                let category = optional_str(args, "category");
+                let enabled_only = args.get("enabledOnly").and_then(Value::as_bool).unwrap_or(false);
+                let (items, total) =
+                    self.store()?.list_tools(query.as_deref(), category.as_deref(), enabled_only)?;
+                to_json(&Paged { items, total: count(total) })
+            }
+
+            "tool.setEnabled" => {
+                let id = required_str(args, "id")?;
+                let enabled = args.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+                self.store()?.set_tool_enabled(&id, enabled, &now_iso8601())?;
+                Ok(Value::Null)
+            }
+
+            "tool.grants" => {
+                let id = required_str(args, "id")?;
+                to_json(&self.store()?.tool_grant_info(&id)?)
+            }
+
+            "tool.setGrant" => {
+                let id = required_str(args, "id")?;
+                let permission = required_str(args, "permission")?;
+                let scope = optional_str(args, "scope").unwrap_or_else(|| "once".to_owned());
+                self.store()?.set_tool_grant(&id, &permission, &scope, None, &now_iso8601())?;
+                Ok(Value::Null)
+            }
+
+            "tool.testRun" => {
+                let id = required_str(args, "id")?;
+                let tool = self.store()?.get_tool(&id)?;
+                if !tool.enabled {
+                    return Err(NexusError::new(
+                        ErrorCode::PolicyNotAllowed,
+                        format!("{} is disabled; enable it first.", tool.name),
+                        false,
+                    ));
+                }
+                let call = crate::tools::default_test_args(self.store.as_ref().unwrap(), &id)
+                    .map_err(tool_failure)?;
+                let now = now_iso8601();
+                let correlation = nexus_store::correlation_id();
+                let job_id = self.store()?.create_job("tool", None, None, 5, &correlation, &now)?;
+                self.store()?.add_job_step(
+                    &job_id,
+                    0,
+                    &nexus_store::types::PlannedStep { tool_id: id.clone(), args: call },
+                    &correlation,
+                )?;
+                self.store()?.record_activity(
+                    "task",
+                    "Tool test queued",
+                    &format!("{} · test run requested.", tool.name),
+                    None,
+                    "pending",
+                    Some(&job_id),
+                    Some(&correlation),
+                    &now,
+                )?;
+                to_json(&json!({ "jobId": job_id }))
+            }
+
+            "approval.pending" => to_json(&self.store()?.pending_approvals(&now_iso8601())?),
+
+            "approval.decide" => {
+                let id = required_str(args, "id")?;
+                let approved = args.get("approved").and_then(Value::as_bool).unwrap_or(false);
+                let scope = optional_str(args, "scope");
+                let now = now_iso8601();
+                let before = self.store()?.get_approval(&id)?;
+                let decided = self.store()?.decide_approval(
+                    &id,
+                    if approved { "approved" } else { "rejected" },
+                    scope.as_deref(),
+                    &now,
+                )?;
+                match decided.decision.as_deref() {
+                    Some("approved") => {
+                        if decided.scope.as_deref() == Some("always") {
+                            if let Some(tool_id) = before.tool_id.as_deref() {
+                                if let Ok(tool) = self.store()?.get_tool(tool_id) {
+                                    for permission in &tool.permissions {
+                                        self.store()?.set_tool_grant(
+                                            tool_id,
+                                            permission,
+                                            "always",
+                                            None,
+                                            &now,
+                                        )?;
+                                    }
+                                }
+                            }
+                        }
+                        if let (Some(job_id), Some(idx)) = (before.job_id.as_deref(), before.step_idx) {
+                            self.store()?.release_step(job_id, idx)?;
+                        }
+                        self.store()?.record_activity(
+                            "approval",
+                            "Approval granted",
+                            &format!("{} — {}", before.summary, decided.scope.as_deref().unwrap_or("once")),
+                            before.agent_id.as_deref(),
+                            "success",
+                            before.job_id.as_deref(),
+                            before.correlation_id.as_deref(),
+                            &now,
+                        )?;
+                    }
+                    Some(_) => {
+                        crate::scheduler::deny_approved_job(self.store_mut()?, &decided, &now);
+                    }
+                    None => {}
+                }
+                Ok(Value::Null)
+            }
+
+            "approval.history" => {
+                let limit = optional_usize(args, "limit").unwrap_or(50).clamp(1, 200);
+                to_json(&self.store()?.approval_history(limit)?)
+            }
+
+            "job.list" => {
+                let limit = optional_usize(args, "limit").unwrap_or(20).clamp(1, 100);
+                to_json(&self.store()?.recent_jobs(limit)?)
+            }
+
+            "job.get" => to_json(&self.store()?.get_job(&required_str(args, "id")?)?),
+
             "store.backup" => {
                 let info = self.store()?.backup(None, &now_iso8601())?;
                 self.log_activity(
@@ -1241,6 +1507,9 @@ impl From<StoreError> for NexusError {
             "store.busy" => ErrorCode::StoreBusy,
             "validation.unknown_id" => ErrorCode::ValidationUnknownId,
             "validation.field" => ErrorCode::ValidationField,
+            "policy.root_denied" => ErrorCode::PolicyRootDenied,
+            "policy.permission_undeclared" => ErrorCode::PolicyNotAllowed,
+            "policy.offline" => ErrorCode::PolicyOffline,
             _ => ErrorCode::Internal,
         };
         let out = NexusError::new(
@@ -1268,6 +1537,16 @@ fn required_str(args: &Value, key: &str) -> CoreResult<String> {
         .filter(|s| !s.trim().is_empty())
         .map(str::to_owned)
         .ok_or_else(|| NexusError::validation(key, "is required"))
+}
+
+fn tool_failure(failure: crate::tools::ToolFailure) -> NexusError {
+    let code = match failure.code.as_str() {
+        "policy.root_denied" => ErrorCode::PolicyRootDenied,
+        "validation.field" => ErrorCode::ValidationField,
+        "tool.unknown" => ErrorCode::NotImplemented,
+        _ => ErrorCode::Internal,
+    };
+    NexusError::new(code, failure.message, code == ErrorCode::Internal)
 }
 
 fn optional_u32(args: &Value, key: &str) -> Option<u32> {
@@ -1527,11 +1806,11 @@ This note is readable.
     fn unimplemented_commands_refuse_with_the_contract_wording() {
         let (mut core, dir) = core_with_tmp("unimplemented");
         let mut sink = RecordingSink::default();
-        let response = core.dispatch("agent.list", &json!({}), &mut sink);
+        let response = core.dispatch("skill.list", &json!({}), &mut sink);
         let value = serde_json::to_value(&response).unwrap();
         assert_eq!(value["ok"], false);
         assert_eq!(value["error"]["code"], "not_implemented");
-        assert!(value["error"]["message"].as_str().unwrap().contains("agent.list"));
+        assert!(value["error"]["message"].as_str().unwrap().contains("skill.list"));
         assert_eq!(sink.events.len(), 0);
         let _ = std::fs::remove_dir_all(dir);
     }
