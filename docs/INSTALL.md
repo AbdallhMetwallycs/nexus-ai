@@ -6,10 +6,14 @@ One file, no administrator rights, no account.
 
 | File | Size | Signed? |
 | --- | --- | --- |
-| `NEXUS AI_0.1.0_x64-setup.exe` | 15.39 MiB | No |
+| `NEXUS-AI_0.1.0_x64-setup.exe` | 15.39 MiB | No |
 | `SHA256SUMS.txt` | ~100 B | — |
 
-The setup file contains the app, the React UI and the pinned llama.cpp CPU engine (build 12189).
+GitHub does not keep spaces in release asset names, so the asset was renamed to
+`NEXUS-AI_0.1.0_x64-setup.exe` for the release while `tauri build` names the local artifact
+`NEXUS AI_0.1.0_x64-setup.exe`. It is the same 16,139,699-byte file; the commands below use the
+published name. The setup file contains the app, the React UI and the pinned llama.cpp CPU engine
+(build 12189).
 **It does not contain a language model.** That is downloaded on first launch, after you accept its
 licence, and verified before it is used.
 
@@ -21,7 +25,7 @@ Expected path: **More info → Run anyway**.
 To check the download was not altered, in PowerShell in the folder you saved both files:
 
 ```powershell
-Get-FileHash 'NEXUS AI_0.1.0_x64-setup.exe' -Algorithm SHA256
+Get-FileHash 'NEXUS-AI_0.1.0_x64-setup.exe' -Algorithm SHA256
 Get-Content SHA256SUMS.txt
 ```
 
@@ -48,7 +52,7 @@ installed beside the app in `engine\`.
 Silent install (what `tools/m6-gate.mjs` does):
 
 ```powershell
-& '.\NEXUS AI_0.1.0_x64-setup.exe' /S /D=C:\path\without\spaces
+& '.\NEXUS-AI_0.1.0_x64-setup.exe' /S /D=C:\path\without\spaces
 ```
 
 ## First launch

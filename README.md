@@ -6,8 +6,8 @@ loop — no account, no cloud dependency, and no prompts or files leaving the co
 
 **Phase 1 UI is finished and approved (2026-11-07) and is not being redesigned. Phase 2 is in
 progress: M1–M4 are complete and tagged; M6 now produces a real Windows installer
-(`NEXUS AI_0.1.0_x64-setup.exe`, 15.39 MiB) that installs the app and the llama.cpp CPU engine and
-downloads the model that fits the machine on first launch.**
+(`NEXUS-AI_0.1.0_x64-setup.exe` on the release page, 15.39 MiB) that installs the app and the
+llama.cpp CPU engine and downloads the model that fits the machine on first launch.**
 
 > **Installer status (2026-11-17):** unsigned — Windows SmartScreen warns on first launch; verify
 > the file against `SHA256SUMS.txt`. The installer contains **no model weights**: on first run the
@@ -28,7 +28,9 @@ What is real today, and the evidence for it:
 
 ## Install it
 
-The release ships one file: `NEXUS AI_0.1.0_x64-setup.exe` (15.39 MiB, unsigned). It installs
+Download from [Releases](https://github.com/AbdallhMetwallycs/nexus-ai/releases/latest). The release
+ships one file: `NEXUS-AI_0.1.0_x64-setup.exe` (15.39 MiB, unsigned; `tauri build` names the local
+artifact `NEXUS AI_0.1.0_x64-setup.exe` — GitHub does not keep spaces in asset names). It installs
 per user under `%LOCALAPPDATA%\NEXUS AI` — no administrator prompt — together with the pinned
 llama.cpp CPU engine (build 12189). Windows will show a SmartScreen warning because the file is
 not signed; compare its SHA-256 with `SHA256SUMS.txt` first.

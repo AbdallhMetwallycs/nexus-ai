@@ -12,7 +12,12 @@
 
 | Artifact | Size | SHA-256 |
 | --- | --- | --- |
-| `NEXUS AI_0.1.0_x64-setup.exe` | 15.39 MiB | `125563cb93a1c6edaf9d186f1b72d2d594e69d69d14b21ffdcad3bd983c95ce4` |
+| `NEXUS-AI_0.1.0_x64-setup.exe` | 15.39 MiB | `125563cb93a1c6edaf9d186f1b72d2d594e69d69d14b21ffdcad3bd983c95ce4` |
+
+GitHub does not keep spaces in release asset names (an upload named `NEXUS AI_0.1.0_x64-setup.exe`
+is stored as `NEXUS.AI_0.1.0_x64-setup.exe`), so the asset was renamed to
+`NEXUS-AI_0.1.0_x64-setup.exe` and `SHA256SUMS.txt` names it exactly that way. `tauri build`
+produces the same 16,139,699-byte file locally as `NEXUS AI_0.1.0_x64-setup.exe`.
 
 ## Install and first run
 
