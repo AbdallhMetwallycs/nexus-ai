@@ -10,8 +10,11 @@ description = "NEXUS AI engine supervisor, model registry, RAM admission and inf
 nexus-store = { path = "../nexus-store" }
 nexus-kb = { path = "../nexus-kb" }
 nexus-policy = { path = "../nexus-policy" }
+nexus-model = { path = "../nexus-model" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# M6: the downloader verifies the pinned SHA-256 before a .part file may become a model.
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 # The two numbers the admission check is built on cannot come from portable std: free
@@ -25,6 +28,7 @@ windows-sys = { version = "0.60.2", features = [
     "Win32_Security_Cryptography",
     "Win32_System_ProcessStatus",
     "Win32_System_SystemInformation",
+    "Win32_Storage_FileSystem",
     "Win32_System_Threading",
 ] }
 

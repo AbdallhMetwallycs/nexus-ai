@@ -5,12 +5,14 @@ the owner's own machine: chat, model management, knowledge and memory, tools and
 loop — no account, no cloud dependency, and no prompts or files leaving the computer.
 
 **Phase 1 UI is finished and approved (2026-11-07) and is not being redesigned. Phase 2 is in
-progress: M1 — one real answer end to end — is complete and tagged `m1-first-answer`
-(`ba15fa2`, 2026-11-14). M2 (SQLite persistence) is next.**
+progress: M1–M4 are complete and tagged; M6 now produces a real Windows installer
+(`NEXUS AI_0.1.0_x64-setup.exe`, 15.39 MiB) that installs the app and the llama.cpp CPU engine and
+downloads the model that fits the machine on first launch.**
 
-> **This build is source-run only. It is not installable.** There is no MSI/NSIS installer, no
-> code signing, no notarization and no updater (`bundle.active` is `false`). It runs from
-> source against a locally installed engine and model. See `RELEASE_NOTES.md`.
+> **Installer status (2026-11-17):** unsigned — Windows SmartScreen warns on first launch; verify
+> the file against `SHA256SUMS.txt`. The installer contains **no model weights**: on first run the
+> app downloads one pinned GGUF file (808 MB for 1B, 2.02 GB for 3B) after the licence tick, checks
+> its SHA-256, and only then answers. See `docs/INSTALL.md` and `RELEASE_NOTES.md`.
 
 What is real today, and the evidence for it:
 
@@ -24,7 +26,19 @@ What is real today, and the evidence for it:
 - Every other screen is still the approved Phase 1 demo and says so with a `DemoNotice`.
   `IMPLEMENTATION_STATUS.md` is the per-screen ledger.
 
-## Run it
+## Install it
+
+The release ships one file: `NEXUS AI_0.1.0_x64-setup.exe` (15.39 MiB, unsigned). It installs
+per user under `%LOCALAPPDATA%\NEXUS AI` — no administrator prompt — together with the pinned
+llama.cpp CPU engine (build 12189). Windows will show a SmartScreen warning because the file is
+not signed; compare its SHA-256 with `SHA256SUMS.txt` first.
+
+On first launch the app measures this machine (total/free RAM, physical cores, free disk), offers
+the model that fits — Llama 3.2 1B under 16 GiB of RAM, 3B at 16 GiB and above — and downloads it
+from huggingface.co after the licence tick. Nothing else is downloaded, ever. Full details and
+uninstall behaviour: `docs/INSTALL.md`.
+
+## Run it from source
 
 Prerequisites (recorded in `TEST_RESULTS.md` → Environment and `AGENTS.md`):
 
@@ -48,6 +62,9 @@ npm run typecheck  # tsc --noEmit
 npm run build      # tsc && vite build
 npm run dev        # browser-only build: the Phase 1 demo, no engine
 npm run preview    # serve the production bundle locally
+node tools/stage-engine.mjs   # copy the 24 engine files into src-tauri/resources/engine
+npm run tauri build           # release binary + NSIS setup under target/release/bundle/nsis
+node tools/m6-gate.mjs        # install that setup silently, drive it, uninstall (needs the setup)
 ```
 
 No API key or cloud account is required. The HTML still links Google Fonts; the UI falls back
@@ -72,7 +89,7 @@ on Qoder or any other tool.
 | `/dashboard` | Dashboard — status, telemetry, active model, recents, quick actions | Partial: active model is real; telemetry, recents and activity are mock |
 | `/chat` | AI Chat — conversations, streaming answers, markdown/code, attachments UI | Real core path (load/send/stop/usage); conversation state in memory; no regenerate |
 | `/agents` | Agent Management — universal + specialized agents, create/edit/enable | Demo: mock definitions, no agent process |
-| `/models` | Model Manager — installed files, mock catalog, compare, hardware fit | Partial: installed rows are real; catalog/downloads are mock |
+| `/models` | Model Manager — installed files, download/install panel, mock catalog, compare, hardware fit | Installed rows and the install/download panel are real; the Catalog tab's store listings are still mock |
 | `/memory` | Memory Center — tiers, search, approval workflow, history | Demo: React state over mock records |
 | `/knowledge` | Knowledge Base — folder tree, documents, simulated indexing | Demo: no parsing or storage |
 | `/tools` | Tools & Skills — permissions, enable/disable, skill builder | Demo: no commands execute |
@@ -133,10 +150,10 @@ Design set from M0 (still the architecture of record): `ARCHITECTURE.md`,
 - Telemetry (CPU/RAM/GPU) is deterministic pseudo-random data, **not sensor data**.
 - "Download model", "run tool", "check updates" and "export log" never perform IO; they show
   progress/toasts that say the action is simulated.
-- Model Manager's Installed tab is empty until a real GGUF file exists in the models folder;
-  the catalog remains mock data.
-- There is no installer, signing, updater, CSP or persistence yet. Those gaps are listed with
-  impact and workarounds in `KNOWN_ISSUES.md`, not left for the reader to discover.
+- Model Manager's Installed tab is empty until a real GGUF file exists in the models folder; the
+  install panel and download are real, the Catalog tab's store rows are mock data.
+- The installer is unsigned, the first-run download needs internet, and neither is hidden:
+  `KNOWN_ISSUES.md` KI-23…KI-25 state the impact and the workaround.
 
 ## How the seam works
 

@@ -2166,10 +2166,12 @@ name = "nexus-core"
 version = "0.1.0"
 dependencies = [
  "nexus-kb",
+ "nexus-model",
  "nexus-policy",
  "nexus-store",
  "serde",
  "serde_json",
+ "sha2",
  "windows-sys 0.60.2",
 ]
 
@@ -2184,6 +2186,10 @@ dependencies = [
  "tempfile",
  "zip",
 ]
+
+[[package]]
+name = "nexus-model"
+version = "0.1.0"
 
 [[package]]
 name = "nexus-policy"

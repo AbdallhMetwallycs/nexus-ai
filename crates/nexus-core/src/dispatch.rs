@@ -68,6 +68,8 @@ pub struct Core {
     /// The single execution slot for jobs. `None` only on an in-memory store, where a
     /// second connection cannot exist; commands that need it refuse with a clear error.
     pub job_runner: Option<crate::scheduler::JobRunner>,
+    /// The one authorised model fetch (M6). Shared with its worker thread.
+    pub downloader: crate::downloader::Downloader,
 }
 
 impl Core {
@@ -91,6 +93,7 @@ impl Core {
             store_error,
             kb_monitor: None,
             job_runner: None,
+            downloader: crate::downloader::Downloader::new(),
         }
     }
 
@@ -117,10 +120,10 @@ impl Core {
     pub fn from_env() -> Self {
         let models = std::env::var_os("NEXUS_MODELS_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("D:\\NEXUS-MODELS"));
+            .unwrap_or_else(default_models_dir);
         let engine = std::env::var_os("NEXUS_ENGINE_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("D:\\NEXUS-SIDECAR\\b12189"));
+            .unwrap_or_else(default_engine_dir);
         let mut core = Self::new(models, engine);
         let data = std::env::var_os("NEXUS_DATA_DIR")
             .map(PathBuf::from)
@@ -166,6 +169,15 @@ impl Core {
 
     pub fn registry(&self) -> Registry {
         Registry::new(&self.models_dir)
+    }
+
+    /// The models folder belongs to the app: a packaged install starts without one, and the
+    /// free-space probe needs a real path (a missing path makes `GetDiskFreeSpaceExW` fail,
+    /// which would tell a fresh machine it has zero bytes free). Creating the folder is not
+    /// a download and needs no network.
+    fn ensure_models_dir(&self) -> CoreResult<()> {
+        std::fs::create_dir_all(&self.models_dir)
+            .map_err(|err| NexusError::io("Creating the models folder", &err))
     }
 
     pub fn active_context(&self) -> Option<u32> {
@@ -739,6 +751,84 @@ Excerpts from the owner's indexed documents. When you use one, cite it          
                 let freed = self.registry().remove(&id)?;
                 Ok(json!({ "freedBytes": freed }))
             }
+
+            "model.catalog" => {
+                // The first-run screen's whole input. The folder is checked by file name, not
+                // by parsing every GGUF, so this stays instant on an empty machine.
+                self.ensure_models_dir()?;
+                let memory = memory_status();
+                let total = memory.map(|m| m.total_mb).unwrap_or(0);
+                let free_disk = crate::system::free_disk_bytes(&self.models_dir).unwrap_or(0);
+                let models: Vec<Value> = nexus_model::catalog()
+                    .iter()
+                    .map(|entry| {
+                        json!({
+                            "id": entry.id,
+                            "label": entry.label,
+                            "fileName": entry.file_name,
+                            "url": entry.url,
+                            "bytes": entry.bytes,
+                            "sha256": entry.sha256,
+                            "contextTokens": entry.context_tokens,
+                            "license": entry.license,
+                            "licenseUrl": entry.license_url,
+                            "minTotalRamMb": entry.min_total_ram_mb,
+                            "fits": memory.is_some_and(|m| m.total_mb >= entry.min_total_ram_mb),
+                            "diskOk": nexus_model::disk_allows(entry.bytes, free_disk),
+                            "installed": self.models_dir.join(entry.file_name).is_file(),
+                        })
+                    })
+                    .collect();
+                Ok(json!({
+                    "totalRamMb": total,
+                    "freeRamMb": memory.map(|m| m.free_mb).unwrap_or(0),
+                    "cores": crate::system::physical_cores(),
+                    "freeDiskBytes": free_disk,
+                    "modelsFolder": self.models_dir.to_string_lossy(),
+                    "recommended": nexus_model::recommend(total).id,
+                    "models": models,
+                    "download": self.downloader.status(),
+                }))
+            }
+
+            "model.download" => {
+                self.ensure_models_dir()?;
+                let id = required_str(args, "id")?;
+                let entry = nexus_model::find(&id).ok_or_else(|| {
+                    NexusError::validation("id", format!("“{id}” is not in the model catalogue."))
+                })?;
+                if !nexus_model::is_safe_file_name(entry.file_name) {
+                    return Err(NexusError::internal(
+                        "the catalogue carries a file name that is not a plain file",
+                    ));
+                }
+                if self.models_dir.join(entry.file_name).is_file() {
+                    return Err(NexusError::validation(
+                        "id",
+                        format!("“{}” is already installed.", entry.label),
+                    ));
+                }
+                let free = crate::system::free_disk_bytes(&self.models_dir).ok_or_else(|| {
+                    NexusError::internal(
+                        "The free space on the models folder could not be read, so nothing was downloaded.",
+                    )
+                })?;
+                if !nexus_model::disk_allows(entry.bytes, free) {
+                    return Err(NexusError::validation(
+                        "id",
+                        format!(
+                            "Not enough disk space: “{}” needs {} bytes plus 1 GiB reserve, and {} bytes are free.",
+                            entry.label, entry.bytes, free
+                        ),
+                    ));
+                }
+                let snapshot = self.downloader.start(entry, &self.models_dir)?;
+                to_json(&snapshot)
+            }
+
+            "model.downloadStatus" => to_json(&self.downloader.status()),
+
+            "model.downloadCancel" => to_json(&self.downloader.cancel()),
 
             "chat.send" => self.chat_send(args, sink),
 
@@ -1643,6 +1733,51 @@ fn explicit_memory_statement(content: &str) -> Option<&str> {
         }
     }
     None
+}
+
+
+
+/// Where an installed copy keeps weights: `%LOCALAPPDATA%\NexusAI\models`. The development
+/// laptop keeps them on `D:` and that folder is preferred when it exists, so the M1/M3/M4
+/// gates keep using the same files they measured.
+fn default_models_dir() -> PathBuf {
+    let legacy = PathBuf::from(r"D:\NEXUS-MODELS");
+    if legacy.is_dir() {
+        return legacy;
+    }
+    local_app_data()
+        .map(|root| root.join("NexusAI").join("models"))
+        .unwrap_or_else(|| PathBuf::from("models"))
+}
+
+/// Engine resolution for a bundled build: environment, then the engine folder shipped as a
+/// Tauri resource, then the development copy, then an `engine` folder beside the exe.
+fn default_engine_dir() -> PathBuf {
+    if let Some(resource) = std::env::var_os("NEXUS_RESOURCE_DIR") {
+        let candidate = PathBuf::from(resource).join("engine");
+        if candidate.join("llama-server.exe").is_file() {
+            return candidate;
+        }
+    }
+    let legacy = PathBuf::from(r"D:\NEXUS-SIDECAR\b12189");
+    if legacy.join("llama-server.exe").is_file() {
+        return legacy;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("engine");
+            if candidate.join("llama-server.exe").is_file() {
+                return candidate;
+            }
+        }
+    }
+    local_app_data()
+        .map(|root| root.join("NexusAI").join("engine"))
+        .unwrap_or_else(|| PathBuf::from("engine"))
+}
+
+fn local_app_data() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
 }
 
 #[cfg(test)]

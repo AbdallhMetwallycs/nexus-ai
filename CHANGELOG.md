@@ -1,10 +1,35 @@
 # Changelog
 
-All notable changes to NEXUS AI. This project is pre-1.0 and source-run only; there is no
-installer, signing or updater yet. Entries describe what ran on this machine, with the
-evidence document named.
+All notable changes to NEXUS AI. This project is pre-1.0. Since M6 there is an unsigned NSIS
+installer; there is still no signing, notarization or updater. Entries describe what ran on this
+machine, with the evidence document named.
 
 ## [Unreleased]
+
+### Added — M6 packaging, first run and model download (2026-11-17)
+
+- **`crates/nexus-model`** (new, zero dependencies): the compiled-in catalogue of two GGUF files
+  (Llama 3.2 1B / 3B Instruct, Q4_K_M) with file name, byte length, SHA-256, HF URL, licence link
+  and RAM floor; `recommend()` returns the largest entry the machine can hold. Five tests pin the
+  digests and the filename rules.
+- **Downloader** (`crates/nexus-core/src/downloader.rs`): one slot, `%SystemRoot%\System32\curl.exe`
+  with `--continue-at -`, progress snapshot, cancel deletes the `.part`, and a rename only after the
+  byte length and pinned SHA-256 match. `model.catalog`, `model.download`, `model.downloadStatus`
+  and `model.downloadCancel` are in the contract and in `PHASE2_IPC_CONTRACT.md`.
+- **First-run screen** (`src/components/setup/`): measures the real machine (RAM, physical cores,
+  free disk, models folder), recommends by RAM floor, requires a licence tick, shows live progress
+  and Cancel, and offers "Do this later" with the shell then saying Chat will refuse. Model Manager
+  gains a real install panel; the Topbar says "No model installed" instead of showing a mock row.
+- **Physical core count fixed** (D-057): the entry walk now uses the 8-byte header instead of the
+  struct size, so this 4-core laptop no longer reports 3.
+- **`tools/stage-engine.mjs`**: stages the 24 files `llama-server.exe` actually loads (44.7 MiB)
+  into `src-tauri/resources/engine` and proves the copy runs by asking `--version`.
+- **NSIS installer**: `bundle.active` true, `targets: ["nsis"]`, per-user install, WebView2
+  bootstrapper embedded, engine as a Tauri resource mapped to `<install>\engine`. Produced
+  `NEXUS AI_0.1.0_x64-setup.exe` (15.39 MiB).
+- **`tools/m6-gate.mjs`**: silent install → installed first run → download start → cancel →
+  answer through the bundled engine → uninstall. Recorded 18 PASS / 1 SKIP (download not
+  completed at 66 kB/s) in `TEST_RESULTS.md`, numbers in `MEASUREMENTS.md` §16.
 
 ### Added — M4 tools, permissions and approvals (2026-11-17)
 

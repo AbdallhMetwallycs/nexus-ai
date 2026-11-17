@@ -421,6 +421,50 @@ plan is M5's learning loop and would have made M4's exit gate untestable and non
 `nexus-policy` (version 0.1.0); no third-party crate was fetched. Nothing in M4 reaches the network,
 and the gate's tools run only Python and PowerShell already present on the machine.
 
+**D-053 — the installer ships the engine, not the weights; the first run downloads exactly one
+pinned model.** Bundling a GGUF would make one 2 GB installer serve a 16 GB laptop and a 32 GB
+desktop alike, and would make every release a licence redistribution of weights. Instead
+`crates/nexus-model` holds a two-entry catalogue (Llama 3.2 1B and 3B, Q4_K_M) with the exact byte
+length and SHA-256 of each file, `recommend()` picks the largest entry whose RAM floor the machine
+meets, and the first-run screen offers that entry after the owner ticks its licence. The catalogue
+is compiled in, so no catalogue server exists to be wrong or unavailable. The installer therefore
+contains zero weights and the app refuses to answer until a verified file is on disk.
+
+**D-054 — the download is `%SystemRoot%\System32\curl.exe` with `--continue-at -`, one slot, and
+verification before rename.** Windows 10 1803+ and 11 ship curl, so the core needs no HTTP client
+crate and no TLS stack of its own. A single `Downloader` slot means two clicks cannot race for the
+same file; an existing `.part` is resumed rather than restarted; cancel terminates curl and deletes
+the partial file, while a failure keeps it so the next attempt resumes. The file is renamed from
+`.part` to its model name only after the byte length matches the catalogue and the SHA-256 equals
+the pinned value — a mismatch deletes it and reports the computed digest. This is the only network
+access the product makes; D-004's "local only" rule now reads "one HTTPS GET, of a pinned file, at
+the owner's first run".
+
+**D-055 — the engine is staged into `src-tauri/resources/engine` and shipped as a Tauri resource.** `tools/stage-engine.mjs` copies the 24 files `llama-server.exe` actually loads from the
+development build folder (the launcher, `llama-server-impl.dll`, `llama-common.dll`, `llama.dll`,
+`mtmd.dll`, the ggml DLLs, every `ggml-cpu-*.dll` kernel and `libomp.dll`) and proves the copy runs
+by asking it for `--version`. Tauri's resource map `resources/engine/ -> engine/` lands them beside
+the installed exe on Windows, which is `NEXUS_RESOURCE_DIR`; `default_engine_dir` prefers
+`$RESOURCE/engine`, then the development folder, then `engine` beside the exe, then
+`%LOCALAPPDATA%\NexusAI\engine`. The staged folder is gitignored: it is a build input, not source.
+
+**D-056 — v0.1.0 is an unsigned, per-user NSIS installer with no updater.** `installMode:
+currentUser` installs under `%LOCALAPPDATA%\NEXUS AI` without an elevation prompt, which is what a
+single-person desktop app should need; the WebView2 bootstrapper is embedded so a machine without
+the runtime can still install, at roughly 1.8 MB of installer size. There is no code-signing
+certificate, so Windows SmartScreen will warn on first launch — that is stated in the release notes
+rather than papered over, and it is why the release ships a `SHA256SUMS.txt`. No updater plugin is
+installed: an app that must stay offline cannot phone home for updates, and a signed-update channel
+is a later decision, not a silent default.
+
+**D-057 — physical cores are counted from the entry headers, not from the struct size.**
+`GetLogicalProcessorInformationEx` writes variable-length entries; a processor-core entry is 48 bytes
+on x64 while `size_of::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>()` is 80 (the largest union member).
+Guarding each step with the 80-byte size skipped the last core, so this 4-core i5-8250U reported 3.
+`count_relation_entries` now bounds each read by the fixed 8-byte header, validates the reported
+`Size`, and has a regression test for four 48-byte entries in a 192-byte buffer. The first-run
+screen and `--threads` both read this number, so an undercount was a throughput bug, not cosmetic.
+
 ## Deferred (explicitly not in Phase 1)
 
 LLM runtime (Ollama/llama.cpp), backend/API, databases, persistent memory,

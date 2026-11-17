@@ -74,12 +74,19 @@ async fn ipc(
 }
 
 pub fn run() {
-    let core = Core::from_env();
-    let cancel = core.cancel.clone();
-    let state = Arc::new(AppState { core: Mutex::new(core), cancel });
-
     let app = tauri::Builder::default()
-        .manage(state)
+        .setup(|app| {
+            // The bundled build ships llama-server.exe and its DLLs as resources. The core
+            // reads this variable before choosing which engine folder to supervise; a
+            // development run without it falls back to the paths `AGENTS.md` documents.
+            if let Ok(dir) = app.path().resource_dir() {
+                std::env::set_var("NEXUS_RESOURCE_DIR", dir);
+            }
+            let core = Core::from_env();
+            let cancel = core.cancel.clone();
+            app.manage(Arc::new(AppState { core: Mutex::new(core), cancel }));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![ipc])
         .build(tauri::generate_context!())
         .expect("NEXUS AI failed to build the Tauri application");

@@ -553,3 +553,40 @@ only; it does not include model prefill, and it is not a claim about larger or s
 **Still open:** one tree of plain-text documents; no OCR; no timing for pdf/docx/xlsx at this
 scale; a single run per step. The hashed-vector half is lexical (D-043), so this number says
 nothing about semantic recall.
+
+## 16. Installer, staged engine and first-run download (M6, 2026-11-17) — [verified, one run]
+
+Machine as in §1; build from `D:\NEXUS-AI-m1` on branch `m2-persistence`; command
+`npm run tauri build` (Tauri CLI 2.12.4), gate `tools/m6-gate.mjs` (18 passed, 1 skipped, exit 0).
+
+| Quantity | Value | How measured |
+| --- | --- | --- |
+| NSIS setup file | `NEXUS AI_0.1.0_x64-setup.exe`, **15.39 MiB** | `target/release/bundle/nsis/`, reported by makensis |
+| Setup SHA-256 | `125563cb93a1c6edaf9d186f1b72d2d594e69d69d14b21ffdcad3bd983c95ce4` | gate `setup-file` step |
+| Staged engine | 24 files, **44.7 MiB** (46,889,245 bytes) | `node tools/stage-engine.mjs` |
+| Engine version in the installer | `0.9.0-dev (build 12189, commit 80d2c0c2c)` | staged copy answering `--version`, then `engine.status` after install |
+| Silent install | exit 0 into `%TEMP%\nexus-m6\install`, engine at `<install>\engine` with 22 DLLs | gate `silent-install`, `bundled-engine` |
+| Installed first run, RAM | 19.9 GB total · 5.7 GB free; 4 physical cores; 71.94 GB free disk | gate `first-run-screen` (installed binary, isolated empty models folder) |
+| Recommendation on this machine | `llama-3.2-3b-instruct-q4-k-m` (2.02 GB) | `model.catalog` + the screen's `BEST FIT` card |
+| First-run download over HTTPS | 0 → 8,065,024 bytes in 120 s = **66 kB/s** (other runs: 94, 114 kB/s) | gate `download-flowing`; `.part` size before/after |
+| Projected transfer at 66 kB/s | 1B ≈ 3.3 h, 3B ≈ 8.5 h | arithmetic from the pinned byte lengths |
+| Cancel | state `cancelled`, `.part` removed | gate `cancel-deletes-part` |
+| Answer through the bundled engine | `ready` (the requested single word) | gate `real-answer`, chat UI in the installed app |
+| Engine actually used | `<install>\engine\llama-server.exe`, port 55020, 4 threads, build 12189 | `engine.status` after the answer |
+| Uninstall | exit 0, `NEXUS-AI.exe` gone; models folder and data folder still present | gate `uninstall`, `weights-preserved` |
+
+**What this section proves:** the produced installer installs silently per user, ships a working
+engine that the app resolves from its own folder, shows the first-run screen with the machine's real
+numbers, starts a real HTTPS download through `curl.exe`, cancels it cleanly, answers through the
+bundled engine once weights exist, and uninstalls without touching the weights or the data folder.
+
+**Still open — the download was not carried to completion on this link.** At 66–114 kB/s the 2.02 GB
+3B file needs 5–9 hours; the gate watched 120 s and records the verification step as *skipped*, not
+passed. The SHA-256 comparison and `.part` rename are covered by unit tests (a mismatched digest
+deletes the file) but not by a completed first-run download. This is the one M6 exit line that has no
+end-to-end evidence yet.
+
+**Separate measurement, same day:** a development-profile attempt at the 1B file reached 37,285,888
+of 807,694,464 bytes in 718 s (≈ 50 kB/s average, log `.m6-download-attempt.log`), consistent with the
+installed runs above and confirming the resume path is the only way this link finishes either file.
+

@@ -300,3 +300,37 @@ designed before any real task needed it.
 **Trigger.** The first task that needs "read this list, then act on each entry". Then: step outputs
 addressable by name, still executed one call per line and still gated.
 **Verified-not-fixed:** the gate's three-step plan passes a literal filename it was given.
+
+## TD-26 — No code signing, notarization or updater
+
+**What.** The NSIS setup and `NEXUS-AI.exe` are unsigned, and no updater plugin is installed
+(D-056). A new version means a new download and a manual reinstall.
+**Why it exists.** A certificate costs money and the owner has not authorised one; an updater
+contradicts the offline posture unless it is designed explicitly.
+**Trigger.** The first distribution to someone other than the owner, or the first security fix that
+must reach an installed copy. Then: sign with a real certificate, publish `SHA256SUMS.txt`, and
+decide an update channel that is either fully manual or explicitly consented.
+**Verified-not-fixed:** the release ships a SHA-256 list and the docs say "unsigned".
+
+## TD-27 — The engine is staged by a manual script, not by the build
+
+**What.** `src-tauri/resources/engine` is produced by `node tools/stage-engine.mjs` from
+`D:\NEXUS-SIDECAR\b12189` and is gitignored. A clean clone cannot build an installer without that
+folder (or `NEXUS_ENGINE_DIR`), and nothing pins the *file* hashes of the engine, only its build
+string.
+**Why it exists.** The upstream archive is 24.7 MB and belongs outside the repo until a release
+process exists.
+**Trigger.** A CI build or a second contributor. Then: fetch the pinned archive by URL + SHA-256,
+stage from the extracted folder, and record the digest in `STAGING.json` verification.
+**Verified-not-fixed:** the staged copy runs `--version` and reports build 12189.
+
+## TD-28 — One download slot, no retry policy, no range scheduling
+
+**What.** `model.download` refuses while another download runs, and a failed transfer stays failed
+until the owner presses Retry. There is no exponential backoff, no mirror fallback and no
+bandwidth cap. Progress is polled by the UI every 500 ms because there is no push event.
+**Why it exists.** M6 needed one honest, resumable transfer; a scheduler would have hidden the
+link-speed reality instead of recording it.
+**Trigger.** A second model download while one is paused, or a flaky link that needs automatic
+resume. Then: event-based progress, bounded retries with `--continue-at -`, and a mirror list.
+**Verified-not-fixed:** cancel deletes the `.part`; failure keeps it; resume works across restarts.

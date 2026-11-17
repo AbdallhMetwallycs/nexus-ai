@@ -150,16 +150,48 @@ from the network**, which D-022 and `--offline` forbid. The mapping is therefore
 model.list({ query?, sort?, installedOnly?, limit?, offset? }):
     Result<{ items: ModelRecord[]; total: number }>
 model.get(id):                       Result<ModelRecord>
-model.setActive(id):                 Result<void>     // replaces Settings/Models toast
+model.setActive(id):                 Result<void>     // remembers the id; loading is engine.loadModel
 model.verify(id):                    Result<{ sizeBytes: number; metadata: GgufMetadata }>
 model.remove(id):                    Result<{ freedGB: number }>
 model.importFromPath(path):          Result<ModelRecord>  // owner already has a .gguf file
+
+// M6: the first-run screen and its single download slot (D-053/D-054)
+model.catalog():                     Result<ModelCatalog>
+model.download({ id }):              Result<DownloadSnapshot>
+model.downloadStatus():              Result<DownloadSnapshot>   // polled, ~500 ms
+model.downloadCancel():              Result<DownloadSnapshot>
+
+interface ModelCatalog {
+  totalRamMb: number; freeRamMb: number; cores: number; freeDiskBytes: number;
+  modelsFolder: string; recommended: string;
+  models: Array<{
+    id: string; label: string; fileName: string; url: string; bytes: number; sha256: string;
+    contextTokens: number; license: string; licenseUrl: string; minTotalRamMb: number;
+    fits: boolean; diskOk: boolean; installed: boolean;
+  }>;
+  download: DownloadSnapshot;        // so a reopened screen resumes its display
+}
+
+interface DownloadSnapshot {
+  id: string; received: number; total: number; bytesPerSec: number;
+  state: 'idle' | 'downloading' | 'verifying' | 'done' | 'failed' | 'cancelled';
+  error?: string;                    // present only when state is failed
+}
 ```
 
-`model.download` is deliberately **absent**. Downloading weights is an owner-authorised network
-operation, so it lives behind `net.*` with an explicit approval round-trip rather than being a
-quiet method on the model domain. `model.importFromPath` covers the offline case, which on this
-machine is the primary case.
+**`model.download` corrected 2026-11-17 (D-053/D-054).** This document originally called download
+an owner-authorised network operation that had to sit behind `net.*` with an approval round-trip.
+M6 put it on the model domain instead, for two reasons that are measured rather than argued: the
+first-run screen is the one place the owner explicitly asks for a file, and a two-step approve →
+poll flow would be the same one HTTPS GET with more states. The narrowness that makes it safe is
+part of the id: the URL, byte length and SHA-256 are compiled into `crates/nexus-model`, so the
+command cannot fetch anything the catalogue does not name, it refuses an id that is already on
+disk, and it refuses a second transfer while the slot is busy. The file is written as `.part` and
+renamed only after the digest matches. `net.*` commands still answer `not_implemented`.
+`model.catalog` is also the only place the UI may take machine numbers from: it reports the RAM,
+physical cores (D-057) and free space on the volume that actually holds the models folder, and
+`fits`/`diskOk` are computed by the core, not by the screen. Progress is polled — there is no
+push event for downloads, unlike chat.
 
 ### 3.3 `chat.*` — conversations and generation
 
@@ -557,7 +589,8 @@ replacement, which keeps old builds honest rather than broken.
 ## 8. What this document does not promise
 
 It does not decide the Rust crate layout, the SQLite schema (see `PHASE2_DATA_MODEL.md`), or the
-sidecar's exact CLI flags (see `PHASE2_SIDECAR_SPEC.md`). It also does not mean any command exists
-yet: **nothing here is implemented**. `src/contract/client.ts` is the code version of that sentence —
-until a core is attached, its transport answers all 97 commands with `not_implemented` and delivers no
-event at all, which is what this section always promised.
+sidecar's exact CLI flags (see `PHASE2_SIDECAR_SPEC.md`). It also does not mean any command works
+yet: `src/contract/ipc.ts` declares 103 commands, and `crates/nexus-core/src/dispatch.rs` answers
+75 of them (the list is in `IMPLEMENTATION_STATUS.md`). The other 28 — `learning.*` (9),
+`net.*` (11), `skill.*` (3), `system.*` (3), `model.importFromPath` and `chat.regenerate` — return
+`not_implemented` with the contract wording, which keeps the seam honest rather than broken.

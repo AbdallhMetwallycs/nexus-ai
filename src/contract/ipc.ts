@@ -237,6 +237,54 @@ export interface ModelListQuery {
   offset?: number;
 }
 
+/** One pinned GGUF in the app's own catalogue. The URL and hash are not editable. */
+export interface CatalogModel {
+  id: string;
+  label: string;
+  fileName: string;
+  url: string;
+  bytes: number;
+  sha256: string;
+  contextTokens: number;
+  license: string;
+  /** Where the first-run screen sends the owner before the licence checkbox. */
+  licenseUrl: string;
+  /** Total RAM at or above which this entry is the recommendation. */
+  minTotalRamMb: number;
+  /** This machine's total RAM meets the entry's floor. */
+  fits: boolean;
+  /** The models folder holds the file plus the 1 GiB reserve. */
+  diskOk: boolean;
+  installed: boolean;
+}
+
+/** What the first-run screen shows. Every field is measured or from the pinned catalogue. */
+export interface ModelCatalog {
+  totalRamMb: number;
+  freeRamMb: number;
+  cores: number;
+  freeDiskBytes: number;
+  modelsFolder: string;
+  /** Catalogue id this machine is recommended; the reason is `fits` plus the RAM floor. */
+  recommended: string;
+  models: CatalogModel[];
+  download: DownloadSnapshot;
+}
+
+/**
+ * The one download slot. `idle` means nothing has started this session; `failed` and
+ * `cancelled` are terminal until another `model.download`. `error` is absent unless the
+ * failure has something honest to say.
+ */
+export interface DownloadSnapshot {
+  id: string;
+  state: 'idle' | 'downloading' | 'verifying' | 'done' | 'failed' | 'cancelled';
+  received: number;
+  total: number;
+  bytesPerSec: number;
+  error?: string;
+}
+
 /* ------------------------------------------------------------------ */
 /* Chat domain                                                         */
 /* ------------------------------------------------------------------ */
@@ -593,6 +641,11 @@ export interface CommandSpecs {
   'model.verify': { args: { id: string }; res: ModelVerifyResult };
   'model.remove': { args: { id: string }; res: { freedBytes: number } };
   'model.importFromPath': { args: { path: string }; res: ModelRecord };
+  // M6: the catalogue behind the first-run screen and its one download slot.
+  'model.catalog': { args: undefined; res: ModelCatalog };
+  'model.download': { args: { id: string }; res: DownloadSnapshot };
+  'model.downloadStatus': { args: undefined; res: DownloadSnapshot };
+  'model.downloadCancel': { args: undefined; res: DownloadSnapshot };
 
   // chat
   'chat.list': { args: { query?: string; limit?: number; offset?: number }; res: Paged<ConversationSummary> };

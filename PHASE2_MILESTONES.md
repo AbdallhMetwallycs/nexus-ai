@@ -407,6 +407,18 @@ disk figures in Model Manager           → computed from the volume that actual
 cold start to first ready model         → measured and recorded
 ```
 
+**Progress 2026-11-17 — packaging and first run landed; meters and cold start not yet.**
+`npm run tauri build` produced `NEXUS AI_0.1.0_x64-setup.exe` (15.39 MiB) with the pinned engine
+staged beside it; `tools/m6-gate.mjs` installed it silently into a fresh folder, drove the
+installed window through first run (real RAM, cores and disk), started and cancelled a real
+download, answered through the bundled engine, and uninstalled with the weights folder preserved
+(18 PASS / 1 SKIP — the download did not complete at 66 kB/s). Evidence: `TEST_RESULTS.md`
+"2026-11-17 — M6 packaging", `MEASUREMENTS.md` §16. Still open: the silent install was on this
+machine's profile, not a second clean profile; Dashboard telemetry is still mock (KI-05); cold
+start to a *downloaded* model is unmeasured because the download has not completed on record.
+The disk figure line is done: `model.catalog` probes the volume with `GetDiskFreeSpaceExW` after
+creating the models folder, and the M6 test covers a folder that does not exist yet.
+
 ---
 
 ## 3. Authorisation checkpoints (nothing here happens silently)

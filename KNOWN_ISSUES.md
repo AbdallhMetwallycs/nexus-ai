@@ -255,3 +255,34 @@ live-only `DemoNotice`; `skill.*` commands are not implemented.
 **Impact.** Only the Tools tab reflects real state. A skill row cannot be run.
 **Workaround:** none needed; the notice is explicit.
 **Target:** M5 (instruction versions) or later.
+
+## KI-23 — The installer is unsigned, so SmartScreen warns on first launch
+
+**What.** `NEXUS AI_0.1.0_x64-setup.exe` has no Authenticode signature. Windows shows "Windows
+protected your PC" until the user chooses "More info → Run anyway"; the installed app is likewise
+unsigned.
+**Impact.** A first-time user who does not expect it may stop at the warning. There is no way to
+verify the publisher from the file itself.
+**Workaround:** compare the SHA-256 of the downloaded file with `SHA256SUMS.txt` in the release.
+**Target:** a code-signing certificate before any wider distribution (TD-26).
+
+## KI-24 — The first run needs internet and can take hours on a slow link
+
+**What.** The installer contains no weights (D-053). On first launch the app downloads one pinned
+GGUF file — 808 MB for 1B, 2.02 GB for 3B. Measured on this machine: 66–114 kB/s from
+huggingface.co, i.e. 2–9 hours. A failure keeps the `.part` file and the next attempt resumes.
+**Impact.** A user on a slow connection waits a long time, and the app is unusable until the file
+is verified. If the link dies mid-transfer the owner must press Retry.
+**Workaround:** let the download finish, or copy a matching GGUF into the models folder yourself
+(`model.catalog` shows the exact file name).
+**Target:** no end-to-end completed download exists on record yet; that is the open M6 evidence
+gap (MEASUREMENTS §16).
+
+## KI-25 — The bundled engine is the CPU build only
+
+**What.** `tools/stage-engine.mjs` stages the cpu-x64 build (`b12189`) with every `ggml-cpu-*.dll`
+kernel. There is no CUDA/Metal/Vulkan backend in the installer.
+**Impact.** Decode speed is what §6 of `MEASUREMENTS.md` measured: CPU-only, 3B at single-digit
+tokens/s on this laptop. Machines with a GPU cannot use it.
+**Workaround:** none in-app; `NEXUS_ENGINE_DIR` can point at a GPU build during development.
+**Target:** a separate GPU bundle, if the owner asks for one.

@@ -32,6 +32,7 @@ import {
   type Tone,
 } from '../components/ui';
 import { ContextPanelCard, KeyValue, PageHeader, WorkArea } from '../components/common/PageChrome';
+import { InstallPanel } from '../components/setup/InstallPanel';
 import { HARDWARE_PROFILE, mockTelemetry } from '../data/hardware';
 import { MOCK_MODELS } from '../data/models';
 import type { ModelRecord } from '../data/types';
@@ -229,12 +230,12 @@ export default function Models() {
         title="Model Manager"
         description={
           live
-            ? 'Installed models are read from disk and loaded through the measured RAM admission check. The catalog below is still Phase 1 mock data.'
+            ? 'Installed models are read from disk and loaded through the measured RAM admission check. The install panel downloads from the pinned catalogue and verifies the file; the Catalog tab below is still Phase 1 mock data.'
             : 'Browse the mock catalog, judge fit for this machine, and pick the active model. Nothing here loads, downloads, or runs weights.'
         }
         notice={
           live ? (
-            <DemoNotice text="Installed rows are real GGUF files. Catalog entries and downloads remain mock data until M2/M3." />
+            <DemoNotice text="Installed rows and the install panel are real: real GGUF files on disk, and a pinned catalogue whose sizes and SHA-256 are enforced. Only the Catalog tab below is mock data." />
           ) : (
             <DemoNotice text="Prototype only — no models are actually installed, and the catalog metadata is mock data." />
           )
@@ -284,64 +285,67 @@ export default function Models() {
       <div className="space-y-4 p-5">
         {tab === 'installed' ? (
           live ? (
-            installed.length === 0 ? (
-              <Card>
-                <CardBody>
-                  <EmptyState
-                    icon={<Database />}
-                    title="No GGUF files found"
-                    description="The core scanned the models folder and found nothing it could parse. Copy a .gguf file into the folder, then reopen this screen."
+            <>
+              <InstallPanel />
+              {installed.length === 0 ? (
+                <Card>
+                  <CardBody>
+                    <EmptyState
+                      icon={<Database />}
+                      title="No GGUF files found"
+                      description="The core scanned the models folder and found nothing it could parse. Use the install panel above, or copy a .gguf file into the folder, then reopen this screen."
+                    />
+                  </CardBody>
+                </Card>
+              ) : (
+                <Card>
+                  <CardHeader
+                    title="Installed on disk"
+                    subtitle="Read by the core from the models folder. Loading runs the measured admission check first."
                   />
-                </CardBody>
-              </Card>
-            ) : (
-              <Card>
-                <CardHeader
-                  title="Installed on disk"
-                  subtitle="Read by the core from the models folder. Loading runs the measured admission check first."
-                />
-                <ul className="divide-y divide-surface-line">
-                  {installed.map((m) => {
-                    const isActive = m.id === activeModelId;
-                    return (
-                      <li
-                        key={m.id}
-                        className={cn(
-                          'flex flex-wrap items-center gap-3 px-4 py-3 transition-colors hover:bg-surface-line/25',
-                          isActive && 'bg-accent/[0.07]',
-                        )}
-                      >
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="truncate text-xs font-semibold text-ink-primary">{m.name}</p>
-                            {isActive && (
-                              <Badge tone="accent" dot>
-                                active
-                              </Badge>
-                            )}
-                          </div>
-                          <p className="mono-num mt-0.5 truncate text-2xs text-ink-faint">
-                            {m.family} · {m.quantization} · {m.contextWindow.toLocaleString()} ctx ·{' '}
-                            {formatBytes(m.sizeGB)} · est. {m.ramGB} GB RAM
-                          </p>
-                        </div>
-                        <Button
-                          size="xs"
-                          variant={isActive ? 'ghost' : 'secondary'}
-                          disabled={isActive}
-                          onClick={() => void setActive(m)}
+                  <ul className="divide-y divide-surface-line">
+                    {installed.map((m) => {
+                      const isActive = m.id === activeModelId;
+                      return (
+                        <li
+                          key={m.id}
+                          className={cn(
+                            'flex flex-wrap items-center gap-3 px-4 py-3 transition-colors hover:bg-surface-line/25',
+                            isActive && 'bg-accent/[0.07]',
+                          )}
                         >
-                          {isActive ? 'Active' : 'Load'}
-                        </Button>
-                        <Button size="xs" variant="ghost" icon={<Eye size={12} />} onClick={() => setDetailId(m.id)}>
-                          Details
-                        </Button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </Card>
-            )
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <p className="truncate text-xs font-semibold text-ink-primary">{m.name}</p>
+                              {isActive && (
+                                <Badge tone="accent" dot>
+                                  active
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="mono-num mt-0.5 truncate text-2xs text-ink-faint">
+                              {m.family} · {m.quantization} · {m.contextWindow.toLocaleString()} ctx ·{' '}
+                              {formatBytes(m.sizeGB)} · est. {m.ramGB} GB RAM
+                            </p>
+                          </div>
+                          <Button
+                            size="xs"
+                            variant={isActive ? 'ghost' : 'secondary'}
+                            disabled={isActive}
+                            onClick={() => void setActive(m)}
+                          >
+                            {isActive ? 'Active' : 'Load'}
+                          </Button>
+                          <Button size="xs" variant="ghost" icon={<Eye size={12} />} onClick={() => setDetailId(m.id)}>
+                            Details
+                          </Button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </Card>
+              )}
+            </>
           ) : (
             <Card>
               <CardBody>

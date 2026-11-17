@@ -16,11 +16,12 @@
 //! [`engine`] (spawn/supervise/terminate the sidecar), [`registry`] (GGUF metadata),
 //! [`admission`] (RAM refusal before allocation), [`net`] (loopback HTTP/1.1),
 //! [`inference`] (streaming + stop), [`kb`] (folder scan, index, monitor),
-//! [`system`] (the three OS numbers),
+//! [`system`] (the OS numbers), [`downloader`] (the one authorised model fetch),
 //! [`dispatch`] (the contract router).
 
 pub mod admission;
 pub mod dispatch;
+pub mod downloader;
 pub mod engine;
 pub mod error;
 pub mod inference;

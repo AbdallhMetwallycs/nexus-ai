@@ -106,3 +106,48 @@ resumes the job from the UI, and the file exists afterwards; Always allow leaves
 It writes `.m4-gate.json` (gitignored), unwatches the folder and removes the fixture tree. Env:
 `NEXUS_CDP_PORT`, `NEXUS_GATE_OUT`. Exit 0 means every step passed; the JSON is written on failure
 too.
+
+## `stage-engine.mjs` — put the engine in the installer
+
+The installer ships `llama-server.exe` and the DLLs it actually loads, not the model weights
+(D-053/D-055). This script copies them from the pinned build into the Tauri resource folder, then
+runs the copied binary once to prove it starts:
+
+```powershell
+node tools/stage-engine.mjs
+# or point at another build
+$env:NEXUS_ENGINE_DIR="D:\some\other\build"; node tools/stage-engine.mjs
+```
+
+It wipes and recreates `src-tauri/resources/engine/` (gitignored), copies the ten files the
+server needs plus every `ggml-cpu-*.dll` kernel variant (24 files, 44.7 MiB in the recorded run),
+records `{ name, bytes, sha256 }` per file in `STAGING.json`, and exits non-zero if
+`llama-server.exe --version` fails or prints nothing. Order matters: stage the engine first, then
+`npm run tauri build` — the bundle maps `resources/engine/` to `engine/` beside the exe.
+
+## `m6-gate.mjs` — packaging, first run and uninstall evidence (M6)
+
+Installs the produced NSIS setup silently into a scratch folder, launches the installed binary,
+and drives its window over the DevTools Protocol. It does not use `tauri dev`:
+
+```powershell
+node tools/stage-engine.mjs
+npm run tauri build
+node tools/m6-gate.mjs                 # install, first run, download start + cancel, real answer, uninstall
+node tools/m6-gate.mjs --no-answer     # skip the chat phase (no weights needed)
+```
+
+What it asserts, in order: the setup file exists (`target/release/bundle/nsis/*-setup.exe`) and its
+SHA-256 is recorded; `/S /D=<scratch>` installs with exit 0 and `engine\llama-server.exe` is present
+where `default_engine_dir` looks; a fresh profile with an empty models folder opens the first-run
+screen whose recommendation matches `model.catalog` (the RAM floor of the real machine); the
+licence tick enables the download and a `.part` starts growing; cancel deletes it and the screen
+says so; with real weights it answers through the bundled engine and `engine.status` reports that
+binary's path; the uninstaller removes the install folder and leaves the weights folder alone.
+
+A download still transferring when the watch window ends is recorded as `SKIP`, never as a pass —
+the file only becomes a model after its SHA-256 matches (this is what happened in the recorded run:
+66 kB/s, so 2.02 GB did not finish). It writes `.m6-gate.json` (gitignored) and
+`screenshots/m6-installed-first-run.png`. Env: `NEXUS_SETUP`, `NEXUS_CDP_PORT`, `NEXUS_GATE_OUT`,
+`NEXUS_M6_DIR`, `NEXUS_M6_WEIGHTS`, `NEXUS_M6_DOWNLOAD_MS`, and `NEXUS_M6_KEEP=1` to keep the
+install and scratch folders. Exit 0 means every step that ran passed.

@@ -119,6 +119,43 @@ pub fn process_memory(pid: u32) -> Option<ProcessMemory> {
     }
 }
 
+/// Bytes available to this user on the volume that holds `path`, or `None` if the OS
+/// refused to say. The downloader fails closed on `None` rather than assuming room.
+pub fn free_disk_bytes(path: &std::path::Path) -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+        let wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut available: u64 = 0;
+        // SAFETY: `wide` is a NUL-terminated UTF-16 path; the two optional out-pointers are
+        // null, which the API documents as "not requested".
+        let ok = unsafe {
+            GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut available,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            None
+        } else {
+            Some(available)
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        None
+    }
+}
+
 /// Physical core count, which is what `--threads` must be (decode got *worse* at 8 logical
 /// threads — `MEASUREMENTS.md` §6). Falls back to half the logical count when the OS will
 /// not say, and never to zero.
@@ -167,24 +204,8 @@ pub fn physical_cores() -> usize {
             let ok =
                 GetLogicalProcessorInformationEx(RelationProcessorCore, buffer.cast(), &mut needed);
             if ok != 0 {
-                let limit = needed as usize;
-                let mut offset = 0usize;
-                loop {
-                    if offset + std::mem::size_of::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>()
-                        > limit
-                    {
-                        break;
-                    }
-                    // Only `Size` is read here; the union member is never touched, so the
-                    // entry layout does not have to be interpreted at all.
-                    let size = (*buffer.add(offset).cast::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>())
-                        .Size as usize;
-                    if size == 0 {
-                        break;
-                    }
-                    cores += 1;
-                    offset += size;
-                }
+                let entries = std::slice::from_raw_parts(buffer, needed as usize);
+                cores = count_relation_entries(entries);
             }
             std::alloc::dealloc(buffer, layout);
             if cores == 0 {
@@ -200,6 +221,34 @@ pub fn physical_cores() -> usize {
             .map(|n| n.get())
             .unwrap_or(1)
     }
+}
+
+/// Counts the entries `GetLogicalProcessorInformationEx` wrote.
+///
+/// The bound is the fixed 8-byte header (`Relationship` + `Size`), never
+/// `size_of::<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>()`: that struct is sized for the
+/// largest union member (80 bytes on x64) while a processor-core entry is 48 bytes, so the
+/// struct-size guard skipped the last core — this laptop reported 3 cores for an
+/// i5-8250U with 4. Corrected 2026-11-17 (DECISION_LOG D-057).
+fn count_relation_entries(buffer: &[u8]) -> usize {
+    const HEADER: usize = 8;
+    let mut cores = 0usize;
+    let mut offset = 0usize;
+    while offset + HEADER <= buffer.len() {
+        let size = u32::from_ne_bytes([
+            buffer[offset + 4],
+            buffer[offset + 5],
+            buffer[offset + 6],
+            buffer[offset + 7],
+        ]) as usize;
+        // A size below the header (including zero) would loop forever or misread; stop.
+        if size < HEADER || offset + size > buffer.len() {
+            break;
+        }
+        cores += 1;
+        offset += size;
+    }
+    cores
 }
 
 /// ISO-8601 UTC to the second, the format `src/data/types.ts` uses for every timestamp.
@@ -269,6 +318,32 @@ mod tests {
     }
 
     #[test]
+    fn a_trailing_short_core_entry_is_counted() {
+        // Four 48-byte entries = 192 bytes; `SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX` is 80.
+        // The old guard (offset + 80 <= 192) stopped after the third entry.
+        let mut entries = vec![0u8; 48 * 4];
+        for index in 0..4 {
+            entries[index * 48 + 4..index * 48 + 8].copy_from_slice(&48u32.to_ne_bytes());
+        }
+        assert_eq!(super::count_relation_entries(&entries), 4);
+        // A zero size must stop the walk rather than loop forever.
+        let mut truncated = entries.clone();
+        truncated[4..8].fill(0);
+        assert_eq!(super::count_relation_entries(&truncated), 0);
+        // A size that overruns the buffer is a malformed answer, not a core.
+        let mut overrun = entries.clone();
+        overrun[4..8].copy_from_slice(&4_096u32.to_ne_bytes());
+        assert_eq!(super::count_relation_entries(&overrun), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn free_disk_space_is_reported_for_an_existing_folder() {
+        let free = free_disk_bytes(&std::env::temp_dir()).expect("the temp volume answers");
+        assert!(free > 0, "{free}");
+    }
+
+    #[test]
     fn iso8601_matches_known_epochs() {
         assert_eq!(iso8601_utc(0), "1970-01-01T00:00:00Z");
         assert_eq!(iso8601_utc(1_735_689_600_000), "2025-01-01T00:00:00Z");
@@ -284,3 +359,4 @@ mod tests {
         assert_eq!(now.as_bytes()[4], b'-');
     }
 }
+

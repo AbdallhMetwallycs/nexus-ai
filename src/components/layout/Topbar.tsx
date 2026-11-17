@@ -9,8 +9,11 @@ export function Topbar() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { theme, toggleTheme } = useTheme();
-  const { online, setOnline, live } = usePlatform();
+  const { online, setOnline, live, coreModels } = usePlatform();
   const activeModel = useActiveModel();
+  // A live build with an empty models folder must not name a model it does not have;
+  // the mock fallback in `useActiveModel` exists for the browser prototype only.
+  const noModel = live && coreModels.length === 0;
 
   const current =
     NAV_ITEMS.find((n) => pathname.startsWith(n.to)) ?? NAV_ITEMS[0];
@@ -25,13 +28,22 @@ export function Topbar() {
       </div>
 
       <div className="flex items-center gap-2">
-        <Tooltip content={`Active model (${live ? 'local registry' : 'simulated'}): ${activeModel.name} — click to open Model Manager`} side="bottom">
+        <Tooltip
+          content={
+            noModel
+              ? 'No GGUF file is installed. Open Model Manager to download the model this machine can run.'
+              : `Active model (${live ? 'local registry' : 'simulated'}): ${activeModel.name} — click to open Model Manager`
+          }
+          side="bottom"
+        >
           <button
             onClick={() => navigate('/models')}
             className="flex h-7 items-center gap-1.5 rounded-full border border-surface-line bg-surface-base px-2.5 text-2xs font-medium text-ink-secondary hover:border-accent/40 hover:text-ink-primary"
           >
-            <Cpu size={12} className="text-accent" />
-            <span className="max-w-[180px] truncate">{activeModel.name}</span>
+            <Cpu size={12} className={noModel ? 'text-ink-faint' : 'text-accent'} />
+            <span className="max-w-[180px] truncate">
+              {noModel ? 'No model installed' : activeModel.name}
+            </span>
           </button>
         </Tooltip>
 

@@ -8,13 +8,97 @@ memory, tokens) live in `MEASUREMENTS.md`; this file records pass/fail and the e
 
 | Item | Value |
 | --- | --- |
-| Machine | owner laptop, Windows, 20.3 GB physical RAM, 3 physical cores |
+| Machine | owner laptop, Windows, 20.3 GB physical RAM, 4 physical cores (`Win32_Processor` agrees after D-057) |
 | Worktree | `D:\NEXUS-AI-m1`, branch `m2-persistence` |
 | Rust | 1.99.1 MSVC, `cargo clippy` from the same toolchain |
 | Node | 24.17.0, npm with `vite` 5.4.21, `@tauri-apps/cli` 2.12.4 |
 | WebView2 | 157.0.4341.46 |
 | Engine | `D:\NEXUS-SIDECAR\b12189\llama-server.exe` (pinned b12189) |
 | Model | `D:\NEXUS-MODELS\Llama-3.2-3B-Instruct-Q4_K_M.gguf` (only authorised file) |
+
+---
+
+## 2026-11-17 — M6 packaging, installed first run and uninstall
+
+Worktree `D:\NEXUS-AI-m1`, branch `m2-persistence` (M6 commits on top of tagged `m4-tools`).
+New: `crates/nexus-model` (pinned catalogue), `crates/nexus-core/src/downloader.rs` and the four
+`model.catalog|download|downloadStatus|downloadCancel` commands, the first-run screen and the
+Models install panel, `tools/stage-engine.mjs`, `tools/m6-gate.mjs`, and the NSIS bundle config.
+`.m6-gate.json` (gitignored) is the machine-readable step list from the run quoted below.
+
+### 1. Crate tests and lints
+
+```
+> cargo test -p nexus-model -p nexus-core
+     Running unittests src\lib.rs (target\debug\deps\nexus_model-d35e5e8686fdb2d4.exe)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src\lib.rs (target\debug\deps\nexus_core-6e6ba21234272458.exe)
+test result: ok. 69 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.62s
+     Running tests\m4_execution.rs (target\debug\deps\m4_execution-161c18532a947265.exe)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.37s
+     Running tests\m6_download.rs (target\debug\deps\m6_download-707a02af6f3fd595.exe)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+> cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized] target(s) in 32.09s        (exit 0, no warnings)
+
+> npx tsc --noEmit                                                    (exit 0)
+> npm run build
+    ✓ 1619 modules transformed.                                      (exit 0)
+```
+
+### 2. Installer build
+
+```
+> node tools/stage-engine.mjs
+staged 24 files, 44.7 MiB -> D:\NEXUS-AI-m1\src-tauri\resources\engine
+  version: 0.9.0-dev (build 12189, commit 80d2c0c2c)
+  built with Clang 20.1.8 for Windows x86_64                          (exit 0)
+
+> npm run tauri build
+     Running makensis to produce D:\NEXUS-AI-m1\target\release\bundle\nsis\NEXUS AI_0.1.0_x64-setup.exe
+    Finished 1 bundle at:
+        D:\NEXUS-AI-m1\target\release\bundle\nsis\NEXUS AI_0.1.0_x64-setup.exe (15.39 MiB)   (exit 0)
+```
+
+### 3. Installed-app gate (`node tools/m6-gate.mjs`)
+
+Silent install into `%TEMP%\nexus-m6\install`, isolated empty models and data folders, CDP on 9333,
+real weights for the answer phase, uninstall at the end. Full output:
+
+```
+PASS  setup-file — …\NEXUS AI_0.1.0_x64-setup.exe — 15.4 MiB, sha256 125563cb93a1c6edaf9d186f1b72d2d594e69d69d14b21ffdcad3bd983c95ce4
+PASS  silent-install — exit=0
+PASS  bundled-engine — C:\Users\BS\AppData\Local\Temp\nexus-m6\install\engine — 22 DLLs beside llama-server.exe
+PASS  catalog-command — recommended=llama-3.2-3b-instruct-q4-k-m totalRamMb=20354 freeDisk=71936212992
+PASS  first-run-screen — 19.9 GB total · 5.7 GB free | 4 physical cores
+PASS  models-folder-isolated — C:\Users\BS\AppData\Local\Temp\nexus-m6\models
+PASS  screenshot — screenshots/m6-installed-first-run.png
+PASS  licence-tick — checkbox checked
+PASS  download-button — Download 2.02 GB
+PASS  download-started — Llama-3.2-3B-Instruct-Q4_K_M.gguf total=2019377696
+PASS  download-flowing — 0 -> 8065024 bytes in 120 s (66 kB/s)
+SKIP  download-verified — still downloading after the watch window at 66 kB/s; SHA-256 + rename path not re-proven live
+PASS  cancel-deletes-part — state=cancelled, .part present=false
+PASS  installed-weights-seen — llama-3.2-3b-instruct-q4-k-m
+PASS  composer-open — after the New conversation attempts
+PASS  real-answer — ready
+PASS  bundled-engine-serving — {"binaryPath":"\\?\\C:\Users\BS\AppData\Local\Temp\nexus-m6\install\engine\llama-server.exe","contextCap":8192,"crashCount":0,"installed":true,"loadedModel":"llama-3.2-3b-instruct-q4-k-m","port":55020,"running":true,"threads":4,"version":"b12189"}
+PASS  uninstall — exit=0, exe present=false
+PASS  weights-preserved — models=true data=true
+
+18 passed, 1 skipped — evidence in D:\NEXUS-AI-m1\.m6-gate.json          (exit 0)
+```
+
+`bundled-engine-serving` is the load-bearing line: the binary path is inside the install folder, so
+the answer came from the engine the installer shipped, not from `D:\NEXUS-SIDECAR`.
+
+### 4. What this run does **not** claim
+
+The first-run download did not finish: 8,065,024 bytes in 120 s on this link. The SHA-256 check and
+the `.part` → model rename are covered by unit tests, but no completed first-run download exists on
+record yet. `MEASUREMENTS.md` §16 records the rates and the projection; the release notes state the
+same limit.
 
 ---
 
